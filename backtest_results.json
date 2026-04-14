@@ -1,8 +1,497 @@
 {
     "summary": {
-        "accuracy_percent": 0,
-        "total_trades": 0,
-        "total_profit": 0
+        "symbol": "EURUSDm",
+        "period": "M15",
+        "candles_analyzed": 2000,
+        "total_trades": 48,
+        "wins": 18,
+        "losses": 30,
+        "accuracy_percent": 37.5,
+        "total_profit_usd": 3.38,
+        "final_balance": 10003.38,
+        "start_time": "2026-03-16 19:30:00",
+        "end_time": "2026-04-14 15:15:00"
     },
-    "trades": []
+    "trades": [
+        {
+            "type": "SELL",
+            "entry_time": "2026-03-19 06:00:00",
+            "exit_time": "2026-03-19 07:00:00",
+            "entry_price": 1.14723,
+            "exit_price": 1.1454958303000542,
+            "profit_pips": 17.341696999457756,
+            "profit_usd": 1.7341696999457756,
+            "outcome": "WIN"
+        },
+        {
+            "type": "SELL",
+            "entry_time": "2026-03-19 09:00:00",
+            "exit_time": "2026-03-19 09:15:00",
+            "entry_price": 1.14635,
+            "exit_price": 1.1477798649266915,
+            "profit_pips": -14.298649266915042,
+            "profit_usd": -1.4298649266915042,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-03-20 06:15:00",
+            "exit_time": "2026-03-20 08:15:00",
+            "entry_price": 1.15616,
+            "exit_price": 1.1576152857400557,
+            "profit_pips": 14.552857400556007,
+            "profit_usd": 1.4552857400556007,
+            "outcome": "WIN"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-03-20 08:30:00",
+            "exit_time": "2026-03-20 09:00:00",
+            "entry_price": 1.15743,
+            "exit_price": 1.1565122430593326,
+            "profit_pips": -9.177569406673136,
+            "profit_usd": -0.9177569406673136,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-03-20 09:15:00",
+            "exit_time": "2026-03-20 09:30:00",
+            "entry_price": 1.15652,
+            "exit_price": 1.1555728145048665,
+            "profit_pips": -9.471854951335068,
+            "profit_usd": -0.9471854951335068,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-03-20 11:15:00",
+            "exit_time": "2026-03-20 13:00:00",
+            "entry_price": 1.15679,
+            "exit_price": 1.155560218076122,
+            "profit_pips": -12.29781923878015,
+            "profit_usd": -1.229781923878015,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-03-20 16:00:00",
+            "exit_time": "2026-03-22 21:00:00",
+            "entry_price": 1.15568,
+            "exit_price": 1.1539791851314578,
+            "profit_pips": -17.00814868542233,
+            "profit_usd": -1.700814868542233,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-03-22 22:45:00",
+            "exit_time": "2026-03-23 00:30:00",
+            "entry_price": 1.15579,
+            "exit_price": 1.1542292524377549,
+            "profit_pips": -15.607475622452238,
+            "profit_usd": -1.5607475622452238,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-03-23 01:30:00",
+            "exit_time": "2026-03-23 02:30:00",
+            "entry_price": 1.15594,
+            "exit_price": 1.1545128797845605,
+            "profit_pips": -14.27120215439448,
+            "profit_usd": -1.427120215439448,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-03-23 13:00:00",
+            "exit_time": "2026-03-26 06:15:00",
+            "entry_price": 1.15911,
+            "exit_price": 1.1552816013875464,
+            "profit_pips": -38.28398612453654,
+            "profit_usd": -3.828398612453654,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "SELL",
+            "entry_time": "2026-03-26 07:00:00",
+            "exit_time": "2026-03-26 11:30:00",
+            "entry_price": 1.15586,
+            "exit_price": 1.1540944704075522,
+            "profit_pips": 17.65529592447912,
+            "profit_usd": 1.765529592447912,
+            "outcome": "WIN"
+        },
+        {
+            "type": "SELL",
+            "entry_time": "2026-03-26 13:15:00",
+            "exit_time": "2026-03-26 14:30:00",
+            "entry_price": 1.15421,
+            "exit_price": 1.1553029408149251,
+            "profit_pips": -10.929408149251696,
+            "profit_usd": -1.0929408149251696,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "SELL",
+            "entry_time": "2026-03-26 18:30:00",
+            "exit_time": "2026-03-26 20:00:00",
+            "entry_price": 1.15327,
+            "exit_price": 1.1543790764289696,
+            "profit_pips": -11.090764289696242,
+            "profit_usd": -1.1090764289696242,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "SELL",
+            "entry_time": "2026-03-27 00:45:00",
+            "exit_time": "2026-03-27 01:30:00",
+            "entry_price": 1.15301,
+            "exit_price": 1.1539156982536998,
+            "profit_pips": -9.056982536996827,
+            "profit_usd": -0.9056982536996827,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "SELL",
+            "entry_time": "2026-03-27 06:30:00",
+            "exit_time": "2026-03-27 07:15:00",
+            "entry_price": 1.1538,
+            "exit_price": 1.1523972221556977,
+            "profit_pips": 14.027778443022054,
+            "profit_usd": 1.4027778443022054,
+            "outcome": "WIN"
+        },
+        {
+            "type": "SELL",
+            "entry_time": "2026-03-27 10:15:00",
+            "exit_time": "2026-03-27 11:45:00",
+            "entry_price": 1.15247,
+            "exit_price": 1.1507409959157384,
+            "profit_pips": 17.29004084261687,
+            "profit_usd": 1.7290040842616872,
+            "outcome": "WIN"
+        },
+        {
+            "type": "SELL",
+            "entry_time": "2026-03-27 12:30:00",
+            "exit_time": "2026-03-27 13:15:00",
+            "entry_price": 1.1515,
+            "exit_price": 1.1524687600419896,
+            "profit_pips": -9.68760041989647,
+            "profit_usd": -0.9687600419896469,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "SELL",
+            "entry_time": "2026-03-27 16:30:00",
+            "exit_time": "2026-03-29 22:00:00",
+            "entry_price": 1.1520299999999999,
+            "exit_price": 1.149337918590153,
+            "profit_pips": 26.920814098467805,
+            "profit_usd": 2.6920814098467805,
+            "outcome": "WIN"
+        },
+        {
+            "type": "SELL",
+            "entry_time": "2026-03-31 04:45:00",
+            "exit_time": "2026-03-31 11:15:00",
+            "entry_price": 1.14687,
+            "exit_price": 1.1475600686164102,
+            "profit_pips": -6.900686164101888,
+            "profit_usd": -0.6900686164101888,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-03-31 17:45:00",
+            "exit_time": "2026-04-01 06:15:00",
+            "entry_price": 1.15396,
+            "exit_price": 1.1578979872979815,
+            "profit_pips": 39.379872979814486,
+            "profit_usd": 3.937987297981449,
+            "outcome": "WIN"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-01 07:45:00",
+            "exit_time": "2026-04-01 08:30:00",
+            "entry_price": 1.15816,
+            "exit_price": 1.1608754144746778,
+            "profit_pips": 27.15414474677713,
+            "profit_usd": 2.715414474677713,
+            "outcome": "WIN"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-01 08:45:00",
+            "exit_time": "2026-04-01 09:30:00",
+            "entry_price": 1.15962,
+            "exit_price": 1.1580469471989372,
+            "profit_pips": -15.730528010629019,
+            "profit_usd": -1.573052801062902,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-01 11:00:00",
+            "exit_time": "2026-04-01 18:00:00",
+            "entry_price": 1.1605,
+            "exit_price": 1.1590984178656474,
+            "profit_pips": -14.01582134352708,
+            "profit_usd": -1.401582134352708,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-01 22:15:00",
+            "exit_time": "2026-04-02 01:00:00",
+            "entry_price": 1.1593,
+            "exit_price": 1.1583632248243108,
+            "profit_pips": -9.367751756892417,
+            "profit_usd": -0.9367751756892417,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "SELL",
+            "entry_time": "2026-04-02 17:45:00",
+            "exit_time": "2026-04-03 20:30:00",
+            "entry_price": 1.15374,
+            "exit_price": 1.1511411708204384,
+            "profit_pips": 25.98829179561557,
+            "profit_usd": 2.598829179561557,
+            "outcome": "WIN"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-06 09:45:00",
+            "exit_time": "2026-04-06 10:45:00",
+            "entry_price": 1.155,
+            "exit_price": 1.1539762044423882,
+            "profit_pips": -10.237955576117841,
+            "profit_usd": -1.023795557611784,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-06 13:30:00",
+            "exit_time": "2026-04-06 14:45:00",
+            "entry_price": 1.15557,
+            "exit_price": 1.1547048498796408,
+            "profit_pips": -8.651501203591483,
+            "profit_usd": -0.8651501203591483,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-06 18:15:00",
+            "exit_time": "2026-04-06 21:15:00",
+            "entry_price": 1.15503,
+            "exit_price": 1.1539413312173274,
+            "profit_pips": -10.886687826725527,
+            "profit_usd": -1.0886687826725527,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-06 22:00:00",
+            "exit_time": "2026-04-07 00:00:00",
+            "entry_price": 1.1545,
+            "exit_price": 1.1538026218734205,
+            "profit_pips": -6.973781265795509,
+            "profit_usd": -0.6973781265795509,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-07 04:45:00",
+            "exit_time": "2026-04-07 05:30:00",
+            "entry_price": 1.15378,
+            "exit_price": 1.1532822580857103,
+            "profit_pips": -4.97741914289751,
+            "profit_usd": -0.497741914289751,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-07 06:15:00",
+            "exit_time": "2026-04-07 08:00:00",
+            "entry_price": 1.15374,
+            "exit_price": 1.154944659590331,
+            "profit_pips": 12.046595903310031,
+            "profit_usd": 1.2046595903310031,
+            "outcome": "WIN"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-07 09:45:00",
+            "exit_time": "2026-04-07 10:00:00",
+            "entry_price": 1.15626,
+            "exit_price": 1.155238612670435,
+            "profit_pips": -10.213873295650266,
+            "profit_usd": -1.0213873295650266,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-07 10:15:00",
+            "exit_time": "2026-04-07 14:30:00",
+            "entry_price": 1.15548,
+            "exit_price": 1.1578461169254743,
+            "profit_pips": 23.66116925474282,
+            "profit_usd": 2.366116925474282,
+            "outcome": "WIN"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-07 14:45:00",
+            "exit_time": "2026-04-07 19:45:00",
+            "entry_price": 1.15716,
+            "exit_price": 1.159820271741586,
+            "profit_pips": 26.602717415860067,
+            "profit_usd": 2.6602717415860067,
+            "outcome": "WIN"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-07 21:00:00",
+            "exit_time": "2026-04-07 22:00:00",
+            "entry_price": 1.15943,
+            "exit_price": 1.1616564324633196,
+            "profit_pips": 22.26432463319661,
+            "profit_usd": 2.226432463319661,
+            "outcome": "WIN"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-08 11:30:00",
+            "exit_time": "2026-04-08 16:00:00",
+            "entry_price": 1.16992,
+            "exit_price": 1.1683781198719816,
+            "profit_pips": -15.418801280184802,
+            "profit_usd": -1.5418801280184802,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-09 02:30:00",
+            "exit_time": "2026-04-09 06:15:00",
+            "entry_price": 1.1666,
+            "exit_price": 1.1658460874904226,
+            "profit_pips": -7.53912509577459,
+            "profit_usd": -0.753912509577459,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-09 08:30:00",
+            "exit_time": "2026-04-09 11:30:00",
+            "entry_price": 1.1667399999999999,
+            "exit_price": 1.1682801503109328,
+            "profit_pips": 15.401503109329084,
+            "profit_usd": 1.5401503109329084,
+            "outcome": "WIN"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-09 12:00:00",
+            "exit_time": "2026-04-09 14:30:00",
+            "entry_price": 1.16841,
+            "exit_price": 1.1675857177056974,
+            "profit_pips": -8.242822943025363,
+            "profit_usd": -0.8242822943025363,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-09 18:00:00",
+            "exit_time": "2026-04-09 23:45:00",
+            "entry_price": 1.17037,
+            "exit_price": 1.1691642703494232,
+            "profit_pips": -12.057296505767479,
+            "profit_usd": -1.2057296505767479,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-10 03:15:00",
+            "exit_time": "2026-04-10 05:15:00",
+            "entry_price": 1.16941,
+            "exit_price": 1.1688148517782744,
+            "profit_pips": -5.951482217256832,
+            "profit_usd": -0.5951482217256832,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-10 09:15:00",
+            "exit_time": "2026-04-10 11:00:00",
+            "entry_price": 1.16971,
+            "exit_price": 1.171583094491588,
+            "profit_pips": 18.73094491587901,
+            "profit_usd": 1.873094491587901,
+            "outcome": "WIN"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-10 14:30:00",
+            "exit_time": "2026-04-10 16:30:00",
+            "entry_price": 1.17277,
+            "exit_price": 1.1716249367175495,
+            "profit_pips": -11.450632824505647,
+            "profit_usd": -1.1450632824505647,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-13 07:15:00",
+            "exit_time": "2026-04-13 08:30:00",
+            "entry_price": 1.16964,
+            "exit_price": 1.168811163456453,
+            "profit_pips": -8.288365435469291,
+            "profit_usd": -0.8288365435469291,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-13 10:45:00",
+            "exit_time": "2026-04-13 11:45:00",
+            "entry_price": 1.16928,
+            "exit_price": 1.1684913047569956,
+            "profit_pips": -7.886952430045113,
+            "profit_usd": -0.7886952430045113,
+            "outcome": "LOSS"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-13 12:45:00",
+            "exit_time": "2026-04-13 14:30:00",
+            "entry_price": 1.1697899999999999,
+            "exit_price": 1.1716334762803666,
+            "profit_pips": 18.434762803667404,
+            "profit_usd": 1.8434762803667404,
+            "outcome": "WIN"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-13 14:45:00",
+            "exit_time": "2026-04-13 17:15:00",
+            "entry_price": 1.17099,
+            "exit_price": 1.1731945502597763,
+            "profit_pips": 22.045502597762834,
+            "profit_usd": 2.2045502597762834,
+            "outcome": "WIN"
+        },
+        {
+            "type": "BUY",
+            "entry_time": "2026-04-14 07:45:00",
+            "exit_time": "2026-04-14 11:00:00",
+            "entry_price": 1.17798,
+            "exit_price": 1.180004173616844,
+            "profit_pips": 20.241736168440383,
+            "profit_usd": 2.0241736168440383,
+            "outcome": "WIN"
+        }
+    ]
 }

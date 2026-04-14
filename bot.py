@@ -392,6 +392,96 @@ class TradeManager:
             logger.error(traceback.format_exc())
             return False
 
+    def manage_open_trades(self, current_price: float, atr: float) -> None:
+        """Manage open trades: break-even and trailing stop logic."""
+        try:
+            trades = self.get_open_trades()
+            if not trades:
+                return
+
+            pip_value = 0.0001  # For EURUSD
+
+            for trade in trades:
+                # Calculate profit in pips
+                if trade.type == 0:  # BUY
+                    profit_pips = (current_price - trade.price_open) / pip_value
+                    be_threshold = Config.BE_ACTIVATION_ATR * atr / pip_value
+
+                    # Move SL to break-even when profit >= 1.0 × ATR
+                    if profit_pips >= be_threshold and trade.sl < trade.price_open:
+                        new_sl = trade.price_open
+                        self._modify_position_sl(trade.ticket, new_sl)
+                        logger.info(f"✓ Break-Even Set for Ticket {trade.ticket}: SL moved to {new_sl:.5f}")
+
+                    # Trailing stop: keep SL at 1.5 × ATR below current price
+                    elif profit_pips > 0:
+                        trailing_sl = current_price - (Config.TRAILING_STOP_ATR * atr)
+                        # Only update if new SL is higher than current SL
+                        if trailing_sl > trade.sl:
+                            self._modify_position_sl(trade.ticket, trailing_sl)
+                            logger.info(f"✓ Trailing Stop Updated for Ticket {trade.ticket}: "
+                                      f"New SL: {trailing_sl:.5f} (Price: {current_price:.5f})")
+
+                else:  # SELL (trade.type == 1)
+                    profit_pips = (trade.price_open - current_price) / pip_value
+                    be_threshold = Config.BE_ACTIVATION_ATR * atr / pip_value
+
+                    # Move SL to break-even when profit >= 1.0 × ATR
+                    if profit_pips >= be_threshold and trade.sl > trade.price_open:
+                        new_sl = trade.price_open
+                        self._modify_position_sl(trade.ticket, new_sl)
+                        logger.info(f"✓ Break-Even Set for Ticket {trade.ticket}: SL moved to {new_sl:.5f}")
+
+                    # Trailing stop: keep SL at 1.5 × ATR above current price
+                    elif profit_pips > 0:
+                        trailing_sl = current_price + (Config.TRAILING_STOP_ATR * atr)
+                        # Only update if new SL is lower than current SL
+                        if trailing_sl < trade.sl:
+                            self._modify_position_sl(trade.ticket, trailing_sl)
+                            logger.info(f"✓ Trailing Stop Updated for Ticket {trade.ticket}: "
+                                      f"New SL: {trailing_sl:.5f} (Price: {current_price:.5f})")
+
+        except Exception as e:
+            logger.error(f"Error in manage_open_trades: {e}")
+            logger.error(traceback.format_exc())
+
+    def _modify_position_sl(self, ticket: int, new_sl: float) -> bool:
+        """Modify an open position's stop loss."""
+        try:
+            position = None
+            trades = self.get_open_trades()
+            for trade in trades:
+                if trade.ticket == ticket:
+                    position = trade
+                    break
+
+            if not position:
+                logger.warning(f"Position {ticket} not found")
+                return False
+
+            filling_mode = self.get_filling_mode()
+
+            request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "position": ticket,
+                "sl": new_sl,
+                "tp": position.tp,
+                "magic": 99999,
+            }
+
+            result = mt5.order_send(request)
+
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                logger.error(f"Failed to modify position {ticket}. Retcode: {result.retcode}")
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Exception in _modify_position_sl: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
 # ============================================================================
 # INDICATOR CALCULATOR CLASS
 # ============================================================================
@@ -866,6 +956,7 @@ class TrendConfirmationBot:
         logger.info(f"EMA 50:        {indicators['ema_50']:.5f} | EMA 200: {indicators['ema_200']:.5f}")
         logger.info(f"RSI(14):       {indicators['rsi']:.2f}")
         logger.info(f"MACD:          {indicators['macd']:.6f} | Signal: {indicators['macd_signal']:.6f} | Histogram: {indicators['macd_hist']:.6f}")
+        logger.info(f"ADX(14):       {indicators['adx']:.2f} (Threshold: {Config.ADX_THRESHOLD})")
         logger.info(f"BB Upper:      {indicators['bb_upper']:.5f} | Middle: {indicators['bb_middle']:.5f} | Lower: {indicators['bb_lower']:.5f}")
         logger.info(f"ATR(14):       {indicators['atr']:.5f}")
         logger.info("=" * 80)
@@ -875,22 +966,31 @@ class TrendConfirmationBot:
         logger.info("=" * 80)
         logger.info("SIGNAL ANALYSIS")
         logger.info("=" * 80)
-        
+
         trend_status = "✓" if details['trend'][1] else "✗"
         logger.info(f"{trend_status} Trend (EMA): {details['trend'][0]}")
-        
+
         rsi_status = "✓" if details['rsi'][1] else "✗"
         logger.info(f"{rsi_status} RSI Filter: {details['rsi'][0]}")
-        
+
         macd_status = "✓" if details['macd'][1] else "✗"
-        logger.info(f"{macd_status} MACD: {details['macd'][0]}")
-        
+        logger.info(f"{macd_status} MACD Zero-Line: {details['macd'][0]}")
+
+        adx_status = "✓" if details['adx'][1] else "✗"
+        logger.info(f"{adx_status} ADX Trend Strength: {details['adx'][0]}")
+
         bb_status = "✓" if details['bb'][1] else "✗"
         logger.info(f"{bb_status} Bollinger Bands: {details['bb'][0]}")
-        
+
         atr_status = "✓" if details['atr'][1] else "✗"
         logger.info(f"{atr_status} ATR: {details['atr'][0]}")
-        
+
+        mtf_status = "✓" if details['mtf'][1] else "✗"
+        logger.info(f"{mtf_status} Multi-Timeframe (H1 EMA200): {details['mtf'][0]}")
+
+        session_status = "✓" if details['session'][1] else "✗"
+        logger.info(f"{session_status} Session Control: {details['session'][0]}")
+
         logger.info("-" * 80)
         logger.info(f"FINAL SIGNAL: {signal}")
         logger.info("=" * 80)
