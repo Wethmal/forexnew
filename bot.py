@@ -336,6 +336,74 @@ class TradeManager:
             logger.error(traceback.format_exc())
             return False
     
+    def _modify_position_sl(self, ticket: int, new_sl: float, tp: float) -> bool:
+        """Modify the stop loss of an open position."""
+        try:
+            request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "position": ticket,
+                "sl": new_sl,
+                "tp": tp,
+            }
+            result = mt5.order_send(request)
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                logger.error(f"Failed to modify SL for ticket {ticket}. Retcode: {result.retcode}")
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"Exception modifying SL for ticket {ticket}: {e}")
+            return False
+
+    def manage_open_trades(self, current_price: float, atr: float):
+        """Apply break-even and trailing stop logic to all open positions."""
+        if atr <= 0 or pd.isna(atr):
+            return
+
+        positions = self.get_open_trades()
+        if not positions:
+            return
+
+        for pos in positions:
+            entry = pos.price_open
+            current_sl = pos.sl
+            tp = pos.tp
+            ticket = pos.ticket
+            is_buy = pos.type == mt5.ORDER_TYPE_BUY
+
+            if is_buy:
+                be_threshold = entry + Config.BE_ACTIVATION_ATR * atr
+                be_active = current_sl >= entry  # SL at or above entry means BE was already applied
+
+                if not be_active and current_price >= be_threshold:
+                    # First time: activate break-even
+                    if self._modify_position_sl(ticket, entry, tp):
+                        logger.info(f"[BE] Ticket {ticket}: SL moved to break-even ({entry:.5f})")
+                    be_active = True
+
+                if be_active:
+                    # Trailing stop: trail 1.5×ATR below current price
+                    new_sl = current_price - Config.TRAILING_STOP_ATR * atr
+                    if new_sl > current_sl:
+                        if self._modify_position_sl(ticket, new_sl, tp):
+                            logger.info(f"[TS] Ticket {ticket}: Trailing SL moved to {new_sl:.5f}")
+
+            else:  # SELL
+                be_threshold = entry - Config.BE_ACTIVATION_ATR * atr
+                be_active = current_sl <= entry  # SL at or below entry means BE was already applied
+
+                if not be_active and current_price <= be_threshold:
+                    # First time: activate break-even
+                    if self._modify_position_sl(ticket, entry, tp):
+                        logger.info(f"[BE] Ticket {ticket}: SL moved to break-even ({entry:.5f})")
+                    be_active = True
+
+                if be_active:
+                    # Trailing stop: trail 1.5×ATR above current price
+                    new_sl = current_price + Config.TRAILING_STOP_ATR * atr
+                    if new_sl < current_sl:
+                        if self._modify_position_sl(ticket, new_sl, tp):
+                            logger.info(f"[TS] Ticket {ticket}: Trailing SL moved to {new_sl:.5f}")
+
     def execute_sell_order(self, entry_price: float, sl_price: float, 
                            tp_price: float, order_comment: str = "") -> Optional[int]:
         """Execute a SELL order with SL and TP. Returns ticket if successful."""
