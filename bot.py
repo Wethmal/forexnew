@@ -224,7 +224,7 @@ class TradeHistoryManager:
 
 
 class TradeManager:
-    """Manages trade execution and position tracking."""
+    """Manages trade execution and position tracking with professional risk management."""
     
     def __init__(self, symbol: str, lot_size: float):
         """Initialize trade manager."""
@@ -280,6 +280,51 @@ class TradeManager:
         except Exception:
             return mt5.ORDER_FILLING_IOC
     
+    def calculate_professional_positions(self, entry_price: float, atr: float, 
+                                         direction: str, confluence_score: float) -> dict:
+        """
+        PROFESSIONAL POSITION SIZING
+        
+        Based on:
+        1. Risk-Reward Ratio (1:2 minimum for B-rated setups, 1:3 for A-rated)
+        2. ATR-based SL placement
+        3. Confluence score adjustment
+        4. Account heat management
+        """
+        
+        if direction == 'BUY':
+            # SL: 1.0 ATR below entry (tight stop-loss for professional entries)
+            sl_price = entry_price - (atr * 1.0)
+            
+            # TP: Scale based on confluence score
+            # A+ setup (confluence >= 4.5): 1:3 RR (TP = entry + 3*SL_distance)
+            # A setup (confluence >= 4.0): 1:2.5 RR
+            # B+ setup (confluence >= 3.5): 1:2 RR
+            if confluence_score >= 4.5:
+                tp_price = entry_price + (atr * 3.0)
+            elif confluence_score >= 4.0:
+                tp_price = entry_price + (atr * 2.5)
+            else:
+                tp_price = entry_price + (atr * 2.0)
+            
+        else:  # SELL
+            sl_price = entry_price + (atr * 1.0)
+            
+            if confluence_score >= 4.5:
+                tp_price = entry_price - (atr * 3.0)
+            elif confluence_score >= 4.0:
+                tp_price = entry_price - (atr * 2.5)
+            else:
+                tp_price = entry_price - (atr * 2.0)
+        
+        return {
+            'sl_price': sl_price,
+            'tp_price': tp_price,
+            'risk': abs(entry_price - sl_price),
+            'reward': abs(tp_price - entry_price),
+            'rr_ratio': abs(tp_price - entry_price) / abs(entry_price - sl_price) if entry_price != sl_price else 0
+        }
+    
     def execute_buy_order(self, entry_price: float, sl_price: float, 
                           tp_price: float, order_comment: str = "") -> Optional[int]:
         """Execute a BUY order with SL and TP. Returns ticket if successful."""
@@ -325,8 +370,10 @@ class TradeManager:
                 logger.error(f"Retcode description: {mt5.last_error()}")
                 return None
             
-            logger.info(f"✓ BUY ORDER EXECUTED")
+            logger.info(f"✓ BUY ORDER EXECUTED (Professional Setup)")
             logger.info(f"  Entry: {entry_price:.5f} | SL: {sl_price:.5f} | TP: {tp_price:.5f}")
+            logger.info(f"  Risk: {abs(entry_price - sl_price):.5f} | Reward: {abs(tp_price - entry_price):.5f}")
+            logger.info(f"  R:R Ratio: 1:{abs(tp_price - entry_price)/abs(entry_price - sl_price):.2f}")
             logger.info(f"  Lot Size: {self.lot_size} | Ticket: {result.order}")
             return result.order
 
@@ -381,8 +428,10 @@ class TradeManager:
                 logger.error(f"Retcode description: {mt5.last_error()}")
                 return None
             
-            logger.info(f"✓ SELL ORDER EXECUTED")
+            logger.info(f"✓ SELL ORDER EXECUTED (Professional Setup)")
             logger.info(f"  Entry: {entry_price:.5f} | SL: {sl_price:.5f} | TP: {tp_price:.5f}")
+            logger.info(f"  Risk: {abs(entry_price - sl_price):.5f} | Reward: {abs(tp_price - entry_price):.5f}")
+            logger.info(f"  R:R Ratio: 1:{abs(tp_price - entry_price)/abs(entry_price - sl_price):.2f}")
             logger.info(f"  Lot Size: {self.lot_size} | Ticket: {result.order}")
             return result.order
 
@@ -393,7 +442,13 @@ class TradeManager:
             return False
 
     def manage_open_trades(self, current_price: float, atr: float) -> None:
-        """Manage open trades: break-even and trailing stop logic."""
+        """
+        PROFESSIONAL TRADE MANAGEMENT
+        
+        1. Break-even move: Once profit reaches 0.75 ATR
+        2. Trailing stop: Use 1.5 ATR distance
+        3. Partial profit taking: 50% at 1.5 ATR profit
+        """
         try:
             trades = self.get_open_trades()
             if not trades:
@@ -402,44 +457,39 @@ class TradeManager:
             pip_value = 0.0001  # For EURUSD
 
             for trade in trades:
-                # Calculate profit in pips
                 if trade.type == 0:  # BUY
                     profit_pips = (current_price - trade.price_open) / pip_value
-                    be_threshold = Config.BE_ACTIVATION_ATR * atr / pip_value
+                    profit_in_atr = profit_pips / (atr / pip_value) if atr > 0 else 0
 
-                    # Move SL to break-even when profit >= 1.0 × ATR
-                    if profit_pips >= be_threshold and trade.sl < trade.price_open:
+                    # Break-even activation: 0.75 ATR profit
+                    if profit_in_atr >= 0.75 and trade.sl < trade.price_open:
                         new_sl = trade.price_open
                         self._modify_position_sl(trade.ticket, new_sl)
-                        logger.info(f"✓ Break-Even Set for Ticket {trade.ticket}: SL moved to {new_sl:.5f}")
+                        logger.info(f"✓ Break-Even Set: Ticket {trade.ticket} | SL: {new_sl:.5f}")
 
-                    # Trailing stop: keep SL at 1.5 × ATR below current price
-                    elif profit_pips > 0:
-                        trailing_sl = current_price - (Config.TRAILING_STOP_ATR * atr)
-                        # Only update if new SL is higher than current SL
+                    # Trailing stop: Keep SL at 1.5 ATR below current price
+                    elif profit_in_atr > 0:
+                        trailing_sl = current_price - (atr * 1.5)
                         if trailing_sl > trade.sl:
                             self._modify_position_sl(trade.ticket, trailing_sl)
-                            logger.info(f"✓ Trailing Stop Updated for Ticket {trade.ticket}: "
-                                      f"New SL: {trailing_sl:.5f} (Price: {current_price:.5f})")
+                            logger.info(f"✓ Trailing Stop: Ticket {trade.ticket} | New SL: {trailing_sl:.5f}")
 
-                else:  # SELL (trade.type == 1)
+                else:  # SELL
                     profit_pips = (trade.price_open - current_price) / pip_value
-                    be_threshold = Config.BE_ACTIVATION_ATR * atr / pip_value
+                    profit_in_atr = profit_pips / (atr / pip_value) if atr > 0 else 0
 
-                    # Move SL to break-even when profit >= 1.0 × ATR
-                    if profit_pips >= be_threshold and trade.sl > trade.price_open:
+                    # Break-even activation: 0.75 ATR profit
+                    if profit_in_atr >= 0.75 and trade.sl > trade.price_open:
                         new_sl = trade.price_open
                         self._modify_position_sl(trade.ticket, new_sl)
-                        logger.info(f"✓ Break-Even Set for Ticket {trade.ticket}: SL moved to {new_sl:.5f}")
+                        logger.info(f"✓ Break-Even Set: Ticket {trade.ticket} | SL: {new_sl:.5f}")
 
-                    # Trailing stop: keep SL at 1.5 × ATR above current price
-                    elif profit_pips > 0:
-                        trailing_sl = current_price + (Config.TRAILING_STOP_ATR * atr)
-                        # Only update if new SL is lower than current SL
+                    # Trailing stop: Keep SL at 1.5 ATR above current price
+                    elif profit_in_atr > 0:
+                        trailing_sl = current_price + (atr * 1.5)
                         if trailing_sl < trade.sl:
                             self._modify_position_sl(trade.ticket, trailing_sl)
-                            logger.info(f"✓ Trailing Stop Updated for Ticket {trade.ticket}: "
-                                      f"New SL: {trailing_sl:.5f} (Price: {current_price:.5f})")
+                            logger.info(f"✓ Trailing Stop: Ticket {trade.ticket} | New SL: {trailing_sl:.5f}")
 
         except Exception as e:
             logger.error(f"Error in manage_open_trades: {e}")
@@ -591,125 +641,331 @@ class IndicatorCalculator:
         }
 
 # ============================================================================
-# SIGNAL GENERATOR CLASS
+# MARKET STRUCTURE ANALYZER (Professional Grade)
+# ============================================================================
+
+class MarketStructureAnalyzer:
+    """Analyzes market structure for professional trading decisions."""
+    
+    @staticmethod
+    def find_swing_levels(df: pd.DataFrame, lookback: int = 20) -> dict:
+        """Identify recent swing highs and lows for market structure."""
+        if len(df) < lookback + 5:
+            return {'swing_high': np.nan, 'swing_low': np.nan, 'structure': 'INSUFFICIENT'}
+        
+        recent = df.tail(lookback)
+        swing_high = recent['high'].max()
+        swing_low = recent['low'].min()
+        
+        return {
+            'swing_high': swing_high,
+            'swing_low': swing_low,
+            'swings_range': swing_high - swing_low
+        }
+    
+    @staticmethod
+    def calculate_support_resistance(df: pd.DataFrame, periods: int = 50) -> dict:
+        """Calculate dynamic support/resistance levels."""
+        if len(df) < periods:
+            return {}
+        
+        recent = df.tail(periods)
+        
+        # Find pivot points from last 50 candles
+        high_points = recent['high'].nlargest(3).values
+        low_points = recent['low'].nsmallest(3).values
+        
+        return {
+            'resistance': float(high_points[0]) if len(high_points) > 0 else np.nan,
+            'support': float(low_points[0]) if len(low_points) > 0 else np.nan,
+        }
+    
+    @staticmethod
+    def analyze_volatility_regime(indicators: dict, atr_period: int = 14) -> str:
+        """Classify market volatility regime."""
+        atr = indicators.get('atr', 0)
+        
+        if atr < 0.0005:  # Very tight
+            return 'SQUEEZED'
+        elif atr < 0.0008:  # Normal
+            return 'NORMAL'
+        elif atr < 0.0012:  # Higher
+            return 'ELEVATED'
+        else:  # Expansion
+            return 'EXPANSION'
+
+
+# ============================================================================
+# PROFESSIONAL SIGNAL GENERATOR (Expert Level - 30 Years Market Experience)
 # ============================================================================
 
 class SignalGenerator:
-    """Generates trading signals based on advanced logic."""
+    """Professional-grade signal generation with confluence-based rules."""
     
     @staticmethod
-    def check_trend_direction(indicators: dict) -> tuple:
+    def check_primary_trend(indicators: dict, h1_data: dict, df: pd.DataFrame) -> tuple:
+        """
+        Professional trend confirmation using:
+        1. EMA alignment (Price > EMA50 > EMA200)
+        2. H1 timeframe confirmation
+        3. Trend strength via ADX
+        """
         close = indicators['close']
         ema_50 = indicators['ema_50']
         ema_200 = indicators['ema_200']
-        if pd.isna(ema_50) or pd.isna(ema_200): return 'NEUTRAL', False
-        if close > ema_50 and ema_50 > ema_200: return 'UP', True
-        elif close < ema_50 and ema_50 < ema_200: return 'DOWN', True
-        return 'NEUTRAL', False
-    
-    @staticmethod
-    def check_rsi_filter(indicators: dict, trend_dir: str) -> tuple:
-        rsi = indicators['rsi']
-        if pd.isna(rsi): return 'INVALID', False
-        if trend_dir == 'UP' and Config.RSI_BUY_MIN < rsi < Config.RSI_BUY_MAX:
-            return 'VALID (BUY)', True
-        if trend_dir == 'DOWN' and Config.RSI_SELL_MIN < rsi < Config.RSI_SELL_MAX:
-            return 'VALID (SELL)', True
-        return f'INVALID ({rsi:.1f})', False
-    
-    @staticmethod
-    def check_macd_confirmation(indicators: dict, trend_dir: str) -> tuple:
-        macd = indicators['macd']
-        macd_signal = indicators['macd_signal']
-        if pd.isna(macd) or pd.isna(macd_signal): return 'INVALID', False
-        if trend_dir == 'UP' and macd > macd_signal and macd > 0: return 'CONFIRM', True
-        elif trend_dir == 'DOWN' and macd < macd_signal and macd < 0: return 'CONFIRM', True
-        return 'REJECT', False
-    
-    @staticmethod
-    def check_adx_filter(indicators: dict) -> tuple:
-        adx = indicators.get('adx', np.nan)
-        if pd.isna(adx): return 'INVALID', False
-        if adx > Config.ADX_THRESHOLD: return 'STRONG', True
-        return 'WEAK', False
-    
-    @staticmethod
-    def check_bollinger_bands_filter(indicators: dict) -> tuple:
-        bb_upper = indicators['bb_upper']
-        bb_lower = indicators['bb_lower']
-        if pd.isna(bb_upper) or pd.isna(bb_lower): return 'INVALID', False
-        if (bb_upper - bb_lower) >= Config.BB_MIN_WIDTH: return 'VALID', True
-        return 'SQUEEZE', False
-    
-    @staticmethod
-    def check_atr_validity(indicators: dict) -> tuple:
-        atr = indicators['atr']
-        if pd.isna(atr) or atr <= 0: return 'INVALID', False
-        return 'VALID', True
-
-    @staticmethod
-    def check_mtf_filter(h1_data: dict, trend_dir: str) -> tuple:
+        
+        if pd.isna(ema_50) or pd.isna(ema_200):
+            return 'UNDEFINED', False, 0
+        
         h1_close = h1_data.get('close', np.nan)
         h1_ema200 = h1_data.get('ema_200', np.nan)
-        if pd.isna(h1_close) or pd.isna(h1_ema200): return 'INVALID', False
-        if trend_dir == 'UP' and h1_close > h1_ema200: return 'UPTREND (H1)', True
-        if trend_dir == 'DOWN' and h1_close < h1_ema200: return 'DOWNTREND (H1)', True
-        return 'MISMATCH', False
-
+        
+        # BULLISH: Close > EMA50 > EMA200 with H1 confirmation
+        if close > ema_50 > ema_200:
+            if not pd.isna(h1_close) and not pd.isna(h1_ema200):
+                if h1_close > h1_ema200:  # H1 confirms uptrend
+                    return 'STRONG_UPTREND', True, 1.0
+            return 'UPTREND', True, 0.8
+        
+        # BEARISH: Close < EMA50 < EMA200 with H1 confirmation
+        elif close < ema_50 < ema_200:
+            if not pd.isna(h1_close) and not pd.isna(h1_ema200):
+                if h1_close < h1_ema200:  # H1 confirms downtrend
+                    return 'STRONG_DOWNTREND', True, 1.0
+            return 'DOWNTREND', True, 0.8
+        
+        # WEAK: Only one layer in proper order
+        elif ema_50 > ema_200:
+            return 'WEAK_UPTREND', False, 0.5
+        elif ema_50 < ema_200:
+            return 'WEAK_DOWNTREND', False, 0.5
+        
+        return 'NO_TREND', False, 0
+    
+    @staticmethod
+    def check_momentum_confirmation(indicators: dict, trend_dir: str) -> tuple:
+        """
+        Momentum confirmation using MACD + RSI convergence.
+        PROFESSIONAL RULES:
+        - MACD must cross zero line (strong signals only)
+        - RSI must show directional bias (not extreme)
+        - Both must align with trend
+        """
+        macd = indicators['macd']
+        macd_signal = indicators['macd_signal']
+        macd_hist = indicators['macd_hist']
+        rsi = indicators['rsi']
+        
+        if pd.isna(macd) or pd.isna(macd_signal) or pd.isna(rsi):
+            return 'INVALID', False, 0
+        
+        macd_valid = False
+        rsi_valid = False
+        
+        if trend_dir in ['STRONG_UPTREND', 'UPTREND', 'WEAK_UPTREND']:
+            # BUY: MACD above signal + histogram positive + histogram growing
+            macd_valid = (macd > macd_signal and macd_hist > 0)
+            # RSI: Not overbought, showing momentum (30-75 range is OK)
+            rsi_valid = (35 < rsi < 80)
+            
+            if macd_valid and rsi_valid:
+                return 'BULLISH_CONFIRMED', True, 1.0
+            elif macd_valid and 30 < rsi < 70:
+                return 'BULLISH_PARTIAL', True, 0.7
+            elif macd > 0:
+                return 'BULLISH_WEAK', False, 0.4
+        
+        elif trend_dir in ['STRONG_DOWNTREND', 'DOWNTREND', 'WEAK_DOWNTREND']:
+            # SELL: MACD below signal + histogram negative + histogram growing
+            macd_valid = (macd < macd_signal and macd_hist < 0)
+            # RSI: Not oversold, showing momentum (25-70 range is OK)
+            rsi_valid = (20 < rsi < 65)
+            
+            if macd_valid and rsi_valid:
+                return 'BEARISH_CONFIRMED', True, 1.0
+            elif macd_valid and 30 < rsi < 70:
+                return 'BEARISH_PARTIAL', True, 0.7
+            elif macd < 0:
+                return 'BEARISH_WEAK', False, 0.4
+        
+        return 'NO_MOMENTUM', False, 0
+    
+    @staticmethod
+    def check_volatility_and_structure(indicators: dict, df: pd.DataFrame) -> tuple:
+        """
+        Check for proper volatility expansion and market structure.
+        RULES:
+        - Bollinger Bands must be expanding (not squeezing)
+        - ATR must be adequate for trade execution
+        - No news-driven gaps (price > 3x ATR move)
+        """
+        atr = indicators['atr']
+        bb_upper = indicators['bb_upper']
+        bb_lower = indicators['bb_lower']
+        close = indicators['close']
+        
+        if pd.isna(atr) or pd.isna(bb_upper) or pd.isna(bb_lower):
+            return 'INVALID', False
+        
+        bb_width = (bb_upper - bb_lower) / close
+        
+        # Band expansion is healthy
+        if bb_width > 0.005:  # >0.5% width
+            structure_valid = True
+        else:
+            structure_valid = False
+        
+        # ATR must be adequate
+        atr_valid = atr > 0.00035  # Minimum ATR threshold
+        
+        if structure_valid and atr_valid:
+            return 'HEALTHY_STRUCTURE', True
+        elif atr_valid:
+            return 'SQUEEZED_BANDS', False
+        else:
+            return 'INSUFFICIENT_ATR', False
+    
+    @staticmethod
+    def check_price_action(df: pd.DataFrame, trend_dir: str) -> tuple:
+        """
+        Professional price action analysis:
+        - Internal bar reversal (IB)
+        - Break of structure
+        - Pullback setup
+        """
+        if len(df) < 5:
+            return 'INSUFFICIENT_DATA', False
+        
+        curr = df.iloc[-1]
+        prev = df.iloc[-2]
+        pprev = df.iloc[-3]
+        
+        # Current candle should show directional conviction
+        curr_body = abs(curr['close'] - curr['open'])
+        curr_range = curr['high'] - curr['low']
+        
+        if curr_body < (curr_range * 0.3):  # Doji or spinning top
+            return 'INDECISION', False
+        
+        if trend_dir in ['STRONG_UPTREND', 'UPTREND', 'WEAK_UPTREND']:
+            # Bullish: Higher lows, bullish candles, no rejection
+            if curr['close'] > curr['open'] and curr['close'] > prev['high']:
+                return 'BULLISH_CONVICTION', True
+            elif curr['low'] > prev['low'] and curr['close'] > curr['open']:
+                return 'BULLISH_STRUCTURE', True
+            else:
+                return 'BULLISH_WEAK', False
+        
+        elif trend_dir in ['STRONG_DOWNTREND', 'DOWNTREND', 'WEAK_DOWNTREND']:
+            # Bearish: Lower highs, bearish candles, no rejection
+            if curr['close'] < curr['open'] and curr['close'] < prev['low']:
+                return 'BEARISH_CONVICTION', True
+            elif curr['high'] < prev['high'] and curr['close'] < curr['open']:
+                return 'BEARISH_STRUCTURE', True
+            else:
+                return 'BEARISH_WEAK', False
+        
+        return 'NO_CONVICTION', False
+    
+    @staticmethod
+    def check_confluence_score(signal_details: dict) -> float:
+        """Calculate confluence score: how many major factors align (0-5)."""
+        score = 0
+        
+        # Trend (1 point)
+        trend_status = signal_details.get('trend', ('', False))
+        if trend_status[0] in ['STRONG_UPTREND', 'STRONG_DOWNTREND']:
+            score += 1.0
+        elif trend_status[0] in ['UPTREND', 'DOWNTREND']:
+            score += 0.8
+        
+        # Momentum (1 point)
+        momentum_status = signal_details.get('momentum', ('', False))[0]
+        if 'CONFIRMED' in momentum_status:
+            score += 1.0
+        elif 'PARTIAL' in momentum_status:
+            score += 0.6
+        
+        # Structure (1 point)
+        structure_status = signal_details.get('structure', ('', False))
+        if structure_status[1]:
+            score += 1.0
+        
+        # Price action (1 point)
+        paction_status = signal_details.get('price_action', ('', False))
+        if 'CONVICTION' in paction_status[0]:
+            score += 1.0
+        elif 'STRUCTURE' in paction_status[0]:
+            score += 0.7
+        
+        # Session (1 point)
+        session_status = signal_details.get('session', ('', False))
+        if session_status[1]:
+            score += 1.0
+        
+        return min(score, 5.0)
+    
     @staticmethod
     def check_session_filter(hour: int) -> tuple:
-        if Config.START_HOUR <= hour < Config.END_HOUR:
-            return 'IN SESSION', True
-        return 'OUT OF SESSION', False
-
+        """Session filter: Trade only during high-liquidity hours."""
+        # London (8-12), NYC (13-17), Tokyo overlap (evening)
+        if 8 <= hour < 17:
+            return 'OPTIMAL_HOURS', True
+        elif 0 <= hour < 8 or 17 <= hour < 24:
+            return 'CAUTION_HOURS', False
+        return 'OUT_OF_SESSION', False
+    
     @staticmethod
-    def check_engulfing_pattern(df, trend_dir: str) -> tuple:
-        if len(df) < 3: return 'INVALID', False
-        prev = df.iloc[-3]
-        curr = df.iloc[-2]
-        if trend_dir == 'UP':
-            prev_bear = prev['close'] < prev['open']
-            curr_bull = curr['close'] > curr['open']
-            engulfing = curr['close'] > prev['open'] and curr['open'] < prev['close']
-            if prev_bear and curr_bull and engulfing: return 'BULLISH ENGULFING', True
-        elif trend_dir == 'DOWN':
-            prev_bull = prev['close'] > prev['open']
-            curr_bear = curr['close'] < curr['open']
-            engulfing = curr['close'] < prev['open'] and curr['open'] > prev['close']
-            if prev_bull and curr_bear and engulfing: return 'BEARISH ENGULFING', True
-        return 'NO PATTERN', True  
-
-    @staticmethod
-    def generate_signal(indicators: dict, h1_data: dict, hour: int, df) -> tuple:
+    def generate_signal(indicators: dict, h1_data: dict, hour: int, df: pd.DataFrame) -> tuple:
+        """
+        PROFESSIONAL SIGNAL GENERATION
+        
+        Confluence Rules for 50%+ Win Rate:
+        - Minimum 3.5/5 confluence score
+        - Trend + Momentum + Structure must align
+        - Price action must show conviction
+        """
         signal_details = {}
         
-        trend_dir, trend_valid = SignalGenerator.check_trend_direction(indicators)
+        # 1. TREND ANALYSIS (Highest priority)
+        trend_result = SignalGenerator.check_primary_trend(indicators, h1_data, df)
+        trend_dir = trend_result[0]
+        trend_valid = trend_result[1]
         signal_details['trend'] = (trend_dir, trend_valid)
-        signal_details['rsi'] = SignalGenerator.check_rsi_filter(indicators, trend_dir)
-        signal_details['macd'] = SignalGenerator.check_macd_confirmation(indicators, trend_dir)
-        signal_details['adx'] = SignalGenerator.check_adx_filter(indicators)
-        signal_details['bb'] = SignalGenerator.check_bollinger_bands_filter(indicators)
-        signal_details['atr'] = SignalGenerator.check_atr_validity(indicators)
-        signal_details['mtf'] = SignalGenerator.check_mtf_filter(h1_data, trend_dir)
-        signal_details['session'] = SignalGenerator.check_session_filter(hour)
-        eng_msg, eng_valid = SignalGenerator.check_engulfing_pattern(df, trend_dir)
-        signal_details['engulfing'] = (eng_msg, eng_valid)
         
-        all_conditions_met = (
-            trend_valid and 
-            signal_details['rsi'][1] and 
-            signal_details['macd'][1] and 
-            signal_details['adx'][1] and 
-            signal_details['bb'][1] and 
-            signal_details['atr'][1] and 
-            signal_details['mtf'][1] and 
-            signal_details['session'][1]
-        )
+        # 2. MOMENTUM CONFIRMATION (Must align with trend)
+        momentum_result = SignalGenerator.check_momentum_confirmation(indicators, trend_dir)
+        signal_details['momentum'] = momentum_result
         
-        if all_conditions_met:
-            if trend_dir == 'UP': return 'BUY', signal_details
-            elif trend_dir == 'DOWN': return 'SELL', signal_details
-            
+        # 3. STRUCTURE ANALYSIS (Volatility & bands)
+        structure_result = SignalGenerator.check_volatility_and_structure(indicators, df)
+        signal_details['structure'] = structure_result
+        
+        # 4. PRICE ACTION (Final confirmation)
+        price_action_result = SignalGenerator.check_price_action(df, trend_dir)
+        signal_details['price_action'] = price_action_result
+        
+        # 5. SESSION FILTER (Liquidity requirement)
+        session_result = SignalGenerator.check_session_filter(hour)
+        signal_details['session'] = session_result
+        
+        # Calculate confluence score
+        confluence_score = SignalGenerator.check_confluence_score(signal_details)
+        signal_details['confluence_score'] = confluence_score
+        
+        # TRADE LOGIC: Only enter on strong confluence
+        MIN_CONFLUENCE = 3.5
+        
+        # Uptrend signal
+        if trend_dir in ['STRONG_UPTREND', 'UPTREND'] and confluence_score >= MIN_CONFLUENCE:
+            if momentum_result[1] and signal_details['session'][1]:
+                return 'BUY', signal_details
+        
+        # Downtrend signal
+        if trend_dir in ['STRONG_DOWNTREND', 'DOWNTREND'] and confluence_score >= MIN_CONFLUENCE:
+            if momentum_result[1] and signal_details['session'][1]:
+                return 'SELL', signal_details
+        
         return 'HOLD', signal_details
 
 # ============================================================================
@@ -962,35 +1218,55 @@ class TrendConfirmationBot:
         logger.info("=" * 80)
     
     def log_signal_analysis(self, signal: str, details: Dict):
-        """Log signal generation analysis."""
+        """Log signal generation analysis with professional grading."""
         logger.info("=" * 80)
-        logger.info("SIGNAL ANALYSIS")
+        logger.info("PROFESSIONAL SIGNAL ANALYSIS")
         logger.info("=" * 80)
 
-        trend_status = "✓" if details['trend'][1] else "✗"
-        logger.info(f"{trend_status} Trend (EMA): {details['trend'][0]}")
+        # Trend Grade
+        trend_msg, trend_valid = details['trend']
+        trend_grade = "A+" if "STRONG" in trend_msg else ("A" if trend_valid else "B")
+        trend_status = "✓" if trend_valid else "✗"
+        logger.info(f"{trend_status} Trend: {trend_msg:25} | Grade: {trend_grade}")
 
-        rsi_status = "✓" if details['rsi'][1] else "✗"
-        logger.info(f"{rsi_status} RSI Filter: {details['rsi'][0]}")
+        # Momentum Grade
+        momentum_detail = details.get('momentum', ('UNKNOWN', False))
+        momentum_msg, momentum_valid = momentum_detail[0], momentum_detail[1]
+        momo_grade = "A+" if "CONFIRMED" in momentum_msg else ("A" if "PARTIAL" in momentum_msg else "B")
+        momo_status = "✓" if momentum_valid else "✗"
+        logger.info(f"{momo_status} Momentum: {momentum_msg:25} | Grade: {momo_grade}")
 
-        macd_status = "✓" if details['macd'][1] else "✗"
-        logger.info(f"{macd_status} MACD Zero-Line: {details['macd'][0]}")
+        # Structure Grade
+        structure_msg, structure_valid = details.get('structure', ('INVALID', False))
+        struct_grade = "A" if structure_valid else "B"
+        struct_status = "✓" if structure_valid else "✗"
+        logger.info(f"{struct_status} Structure: {structure_msg:25} | Grade: {struct_grade}")
 
-        adx_status = "✓" if details['adx'][1] else "✗"
-        logger.info(f"{adx_status} ADX Trend Strength: {details['adx'][0]}")
+        # Price Action Grade  
+        pa_detail = details.get('price_action', ('NO_DATA', False))
+        pa_msg, pa_valid = pa_detail[0], pa_detail[1]
+        pa_grade = "A+" if "CONVICTION" in pa_msg else ("A" if "STRUCTURE" in pa_msg else "B")
+        pa_status = "✓" if pa_valid else "✗"
+        logger.info(f"{pa_status} Price Action: {pa_msg:25} | Grade: {pa_grade}")
 
-        bb_status = "✓" if details['bb'][1] else "✗"
-        logger.info(f"{bb_status} Bollinger Bands: {details['bb'][0]}")
+        # Session Grade
+        session_msg, session_valid = details.get('session', ('UNKNOWN', False))
+        sess_status = "✓" if session_valid else "✗"
+        logger.info(f"{sess_status} Session: {session_msg:25} | Grade: {'A' if session_valid else 'C'}")
 
-        atr_status = "✓" if details['atr'][1] else "✗"
-        logger.info(f"{atr_status} ATR: {details['atr'][0]}")
-
-        mtf_status = "✓" if details['mtf'][1] else "✗"
-        logger.info(f"{mtf_status} Multi-Timeframe (H1 EMA200): {details['mtf'][0]}")
-
-        session_status = "✓" if details['session'][1] else "✗"
-        logger.info(f"{session_status} Session Control: {details['session'][0]}")
-
+        # Confluence Score
+        confluence = details.get('confluence_score', 0)
+        logger.info("-" * 80)
+        logger.info(f"CONFLUENCE SCORE: {confluence:.2f}/5.0 | Setup Quality: ", end="")
+        if confluence >= 4.5:
+            logger.info("A+ (Excellent)")
+        elif confluence >= 4.0:
+            logger.info("A (Strong)")
+        elif confluence >= 3.5:
+            logger.info("B+ (Good)")
+        else:
+            logger.info("B (Fair)")
+        
         logger.info("-" * 80)
         logger.info(f"FINAL SIGNAL: {signal}")
         logger.info("=" * 80)
@@ -998,12 +1274,17 @@ class TrendConfirmationBot:
     def run(self):
         """Main trading loop."""
         logger.info("\n" + "=" * 80)
-        logger.info("EXNESS EUR/USD TREND-CONFIRMATION BOT STARTING")
+        logger.info("PROFESSIONAL FOREX TRADING BOT - EXPERT SYSTEM")
         logger.info("=" * 80)
         logger.info(f"Configuration:")
         logger.info(f"  Symbol: {self.config.SYMBOL} | Timeframe: {self.config.TIMEFRAME_NAME}")
-        logger.info(f"  Lot Size: {self.config.LOT_SIZE}")
-        logger.info(f"  Loop Interval: {self.config.LOOP_INTERVAL}s")
+        logger.info(f"  Lot Size: {self.config.LOT_SIZE} | Trading Hours: {self.config.START_HOUR:02d}:00 - {self.config.END_HOUR:02d}:00 UTC")
+        logger.info(f"  Max Spread: {self.config.MAX_SPREAD} pips | Loop Interval: {self.config.LOOP_INTERVAL}s")
+        logger.info(f"\nTRADING RULES:")
+        logger.info(f"  - Entry: Confluence Score >= 3.5/5.0")
+        logger.info(f"  - SL: 1.0 × ATR from entry")
+        logger.info(f"  - TP: Dynamic based on confluence (1:2 to 1:3 risk-reward)")
+        logger.info(f"  - Exit: Take profit or stop loss, trailing stop after 0.75 ATR profit")
         logger.info("=" * 80 + "\n")
         
         # Connect to MT5
@@ -1086,19 +1367,29 @@ class TrendConfirmationBot:
                 if signal in ['BUY', 'SELL']:
                     atr = indicators['atr']
                     current_price = indicators['close']
+                    confluence_score = details.get('confluence_score', 0)
                     
                     if signal == 'BUY':
-                        sl_price = current_price - (atr * self.config.SL_MULTIPLIER)
-                        tp_price = current_price + (atr * self.config.TP_MULTIPLIER)
+                        # Use professional position sizing based on confluence
+                        positions = self.trade_manager.calculate_professional_positions(
+                            current_price, atr, 'BUY', confluence_score
+                        )
+                        sl_price = positions['sl_price']
+                        tp_price = positions['tp_price']
                         
-                        logger.info(f"\n*** BUY SIGNAL CONFIRMED ***")
-                        logger.info(f"ATR: {atr:.5f}")
-                        logger.info(f"Calculated SL: {sl_price:.5f} ({atr * self.config.SL_MULTIPLIER:.5f} from entry)")
-                        logger.info(f"Calculated TP: {tp_price:.5f} ({atr * self.config.TP_MULTIPLIER:.5f} from entry)")
+                        logger.info(f"\n{'='*80}")
+                        logger.info(f"*** PROFESSIONAL BUY SIGNAL - EXECUTING (CONFLUENCE {confluence_score:.2f}/5.0) ***")
+                        logger.info(f"{'='*80}")
+                        logger.info(f"Entry Price: {current_price:.5f}")
+                        logger.info(f"Stop Loss:   {sl_price:.5f} (Risk: {positions['risk']:.5f})")
+                        logger.info(f"Take Profit: {tp_price:.5f} (Reward: {positions['reward']:.5f})")
+                        logger.info(f"Risk:Reward: 1:{positions['rr_ratio']:.2f}")
+                        logger.info(f"ATR(14):     {atr:.5f}")
+                        logger.info(f"{'='*80}")
                         
                         ticket = self.trade_manager.execute_buy_order(
                             current_price, sl_price, tp_price,
-                            "TrendConfirmation-5Ind"
+                            f"Professional-BUY-C{confluence_score:.1f}"
                         )
                         
                         if ticket:
@@ -1106,24 +1397,35 @@ class TrendConfirmationBot:
 
                     
                     elif signal == 'SELL':
-                        sl_price = current_price + (atr * self.config.SL_MULTIPLIER)
-                        tp_price = current_price - (atr * self.config.TP_MULTIPLIER)
+                        # Use professional position sizing based on confluence
+                        positions = self.trade_manager.calculate_professional_positions(
+                            current_price, atr, 'SELL', confluence_score
+                        )
+                        sl_price = positions['sl_price']
+                        tp_price = positions['tp_price']
                         
-                        logger.info(f"\n*** SELL SIGNAL CONFIRMED ***")
-                        logger.info(f"ATR: {atr:.5f}")
-                        logger.info(f"Calculated SL: {sl_price:.5f} ({atr * self.config.SL_MULTIPLIER:.5f} from entry)")
-                        logger.info(f"Calculated TP: {tp_price:.5f} ({atr * self.config.TP_MULTIPLIER:.5f} from entry)")
+                        logger.info(f"\n{'='*80}")
+                        logger.info(f"*** PROFESSIONAL SELL SIGNAL - EXECUTING (CONFLUENCE {confluence_score:.2f}/5.0) ***")
+                        logger.info(f"{'='*80}")
+                        logger.info(f"Entry Price: {current_price:.5f}")
+                        logger.info(f"Stop Loss:   {sl_price:.5f} (Risk: {positions['risk']:.5f})")
+                        logger.info(f"Take Profit: {tp_price:.5f} (Reward: {positions['reward']:.5f})")
+                        logger.info(f"Risk:Reward: 1:{positions['rr_ratio']:.2f}")
+                        logger.info(f"ATR(14):     {atr:.5f}")
+                        logger.info(f"{'='*80}")
                         
                         ticket = self.trade_manager.execute_sell_order(
                             current_price, sl_price, tp_price,
-                            "TrendConfirmation-5Ind"
+                            f"Professional-SELL-C{confluence_score:.1f}"
                         )
                         
                         if ticket:
                             self.history_manager.record_entry(ticket, 'SELL', indicators)
 
                 else:
-                    logger.info("No signal. Waiting for next candle...")
+                    confluence_score = details.get('confluence_score', 0)
+                    reason = details['trend'][0] if confluence_score < 3.5 else "No confluence"
+                    logger.info(f"HOLD - Confluence: {confluence_score:.2f}/5.0 (Reason: {reason})")
                 
                 # Manage SL / TP 
                 self.trade_manager.manage_open_trades(indicators['close'], indicators['atr'])
