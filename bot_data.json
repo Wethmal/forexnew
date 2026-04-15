@@ -1,0 +1,315 @@
+{
+  "timestamp": "2026-04-15 13:44:37",
+  "account": {
+    "balance": 10.26,
+    "equity": 10.2,
+    "company": "Exness Technologies Ltd",
+    "currency": "USD"
+  },
+  "symbols": {
+    "EURUSDm": {
+      "indicators": {
+        "close": 1.17899,
+        "high": 1.17904,
+        "low": 1.17849,
+        "open": 1.17852,
+        "ema_9": 1.1788611696604274,
+        "ema_21": 1.1786716234413501,
+        "ema_50": 1.1767021531067332,
+        "ema_200": 1.167292084489688,
+        "rsi": 55.66570290964398,
+        "macd": 0.0004869212101483722,
+        "macd_signal": 0.000776037919033868,
+        "macd_hist": -0.00028911670888549584,
+        "bb_upper": 1.1803433738253462,
+        "bb_middle": 1.1792055,
+        "bb_lower": 1.1780676261746537,
+        "atr": 0.0009585173631167552,
+        "adx": 34.222546146942896
+      },
+      "h4_data": {
+        "close": 1.17899,
+        "ema_200": 1.1640436009645256
+      },
+      "signal": "HOLD",
+      "details": {
+        "market_structure": [
+          "RANGE",
+          false
+        ],
+        "h4_alignment": [
+          "H4_BULL",
+          true
+        ],
+        "ema_trend": [
+          "H1_BULL",
+          true
+        ],
+        "rsi_momentum": [
+          "RSI_55.7(slope 3.48)",
+          true
+        ],
+        "macd_momentum": [
+          "MACD_HIST_-0.0003",
+          true
+        ],
+        "candlestick": [
+          "BULLISH_ENGULFING",
+          true
+        ],
+        "volatility": [
+          "BB_OK(0.00228)",
+          false
+        ],
+        "trend_strength": [
+          "ADX_34.2",
+          true
+        ],
+        "session": [
+          "OPTIMAL",
+          true
+        ],
+        "confluence_score": 0,
+        "buy_score": 4,
+        "sell_score": 0
+      },
+      "open_trades": []
+    },
+    "USDJPYm": {
+      "indicators": {
+        "close": 158.764,
+        "high": 158.936,
+        "low": 158.713,
+        "open": 158.928,
+        "ema_9": 158.90383102930988,
+        "ema_21": 158.9239863587121,
+        "ema_50": 159.03906607967332,
+        "ema_200": 159.207021422095,
+        "rsi": 40.582490798320215,
+        "macd": -0.04179431478607398,
+        "macd_signal": -0.06163247302301109,
+        "macd_hist": 0.01983815823693711,
+        "bb_upper": 159.05389475784213,
+        "bb_middle": 158.86659999999998,
+        "bb_lower": 158.67930524215782,
+        "atr": 0.14536915036525172,
+        "adx": 27.155423893478243
+      },
+      "h4_data": {
+        "close": 158.764,
+        "ema_200": 158.42080577463366
+      },
+      "signal": "HOLD",
+      "details": {
+        "market_structure": [
+          "DOWNTREND",
+          true
+        ],
+        "h4_alignment": [
+          "H4_BULL",
+          true
+        ],
+        "ema_trend": [
+          "H1_BEAR",
+          true
+        ],
+        "rsi_momentum": [
+          "RSI_40.6(slope -7.23)",
+          true
+        ],
+        "macd_momentum": [
+          "MACD_HIST_0.0198",
+          true
+        ],
+        "candlestick": [
+          "BEARISH_ENGULFING",
+          true
+        ],
+        "volatility": [
+          "BB_OK(0.37459)",
+          false
+        ],
+        "trend_strength": [
+          "ADX_27.2",
+          true
+        ],
+        "session": [
+          "OPTIMAL",
+          true
+        ],
+        "confluence_score": 0,
+        "buy_score": 3,
+        "sell_score": 2
+      },
+      "open_trades": []
+    },
+    "GBPUSDm": {
+      "indicators": {
+        "close": 1.35621,
+        "high": 1.3564,
+        "low": 1.35561,
+        "open": 1.35595,
+        "ema_9": 1.3563341896490129,
+        "ema_21": 1.3558610070332497,
+        "ema_50": 1.3528418696529667,
+        "ema_200": 1.3406951497128137,
+        "rsi": 56.68312990177787,
+        "macd": 0.0009294134756161476,
+        "macd_signal": 0.0013634123086227854,
+        "macd_hist": -0.00043399883300663774,
+        "bb_upper": 1.3581807783576785,
+        "bb_middle": 1.3567110000000002,
+        "bb_lower": 1.355241221642322,
+        "atr": 0.0012244412180427934,
+        "adx": 37.941677766211214
+      },
+      "h4_data": {
+        "close": 1.35621,
+        "ema_200": 1.3386938012616494
+      },
+      "signal": "HOLD",
+      "details": {
+        "market_structure": [
+          "DOWNTREND",
+          true
+        ],
+        "h4_alignment": [
+          "H4_BULL",
+          true
+        ],
+        "ema_trend": [
+          "H1_BULL",
+          true
+        ],
+        "rsi_momentum": [
+          "RSI_56.7(slope 1.53)",
+          true
+        ],
+        "macd_momentum": [
+          "MACD_HIST_-0.0004",
+          true
+        ],
+        "candlestick": [
+          "NEUTRAL",
+          false
+        ],
+        "volatility": [
+          "BB_OK(0.00294)",
+          false
+        ],
+        "trend_strength": [
+          "ADX_37.9",
+          true
+        ],
+        "session": [
+          "OPTIMAL",
+          true
+        ],
+        "confluence_score": 0,
+        "buy_score": 4,
+        "sell_score": 0
+      },
+      "open_trades": []
+    },
+    "AUDUSDm": {
+      "indicators": {
+        "close": 0.71437,
+        "high": 0.71448,
+        "low": 0.71403,
+        "open": 0.71424,
+        "ema_9": 0.7135688868347847,
+        "ema_21": 0.7127653777787681,
+        "ema_50": 0.7107886445474936,
+        "ema_200": 0.7027157983390415,
+        "rsi": 70.73983297850597,
+        "macd": 0.0009748810160503663,
+        "macd_signal": 0.0010085976476972278,
+        "macd_hist": -3.371663164686159e-05,
+        "bb_upper": 0.7144036814139311,
+        "bb_middle": 0.7131554999999999,
+        "bb_lower": 0.7119073185860688,
+        "atr": 0.0008115178425584991,
+        "adx": 30.729476898828437
+      },
+      "h4_data": {
+        "close": 0.71437,
+        "ema_200": 0.7030197005984784
+      },
+      "signal": "HOLD",
+      "details": {
+        "market_structure": [
+          "UPTREND",
+          true
+        ],
+        "h4_alignment": [
+          "H4_BULL",
+          true
+        ],
+        "ema_trend": [
+          "H1_BULL",
+          true
+        ],
+        "rsi_momentum": [
+          "RSI_70.7(slope 0.74)",
+          false
+        ],
+        "macd_momentum": [
+          "MACD_HIST_-0.0000",
+          true
+        ],
+        "candlestick": [
+          "NEUTRAL",
+          false
+        ],
+        "volatility": [
+          "BB_OK(0.00250)",
+          true
+        ],
+        "trend_strength": [
+          "ADX_30.7",
+          true
+        ],
+        "session": [
+          "OPTIMAL",
+          true
+        ],
+        "confluence_score": 0,
+        "buy_score": 3,
+        "sell_score": 0
+      },
+      "open_trades": [
+        {
+          "ticket": 4273148004,
+          "type": "BUY",
+          "volume": 0.01,
+          "price_open": 0.7142600000000001,
+          "price_current": 0.71437,
+          "profit": 0.11,
+          "sl": 0.7132,
+          "tp": 0.715
+        },
+        {
+          "ticket": 4273952049,
+          "type": "BUY",
+          "volume": 0.01,
+          "price_open": 0.7143900000000001,
+          "price_current": 0.71437,
+          "profit": -0.02,
+          "sl": 0.7132,
+          "tp": 0.71511
+        },
+        {
+          "ticket": 4273956736,
+          "type": "BUY",
+          "volume": 0.01,
+          "price_open": 0.71452,
+          "price_current": 0.71437,
+          "profit": -0.15,
+          "sl": 0.7132,
+          "tp": 0.71525
+        }
+      ]
+    }
+  },
+  "history": []
+}
