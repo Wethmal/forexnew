@@ -1,85 +1,64 @@
 {
-    "timestamp": "2026-04-14 21:14:59",
+    "timestamp": "2026-04-15 09:59:29",
     "account": {
-        "balance": 11.0,
-        "equity": 10.43,
+        "balance": 10.26,
+        "equity": 10.26,
         "company": "Exness Technologies Ltd",
         "currency": "USD"
     },
     "config": {
         "symbol": "EURUSDm",
-        "timeframe": "M15",
-        "h1_data": {},
+        "timeframe": "H1",
+        "h1_data": {
+            "close": 1.17877,
+            "ema_200": 1.1665757342385827
+        },
         "lot_size": 0.01
     },
     "indicators": {
-        "close": 1.17922,
-        "high": 1.18025,
-        "low": 1.17921,
-        "ema_50": 1.178642905131626,
-        "ema_200": 1.174094525746587,
-        "rsi": 46.91038561460196,
-        "macd": 0.0003629364537569568,
-        "macd_signal": 0.0005369920700421194,
-        "macd_hist": -0.00017405561628516255,
-        "bb_upper": 1.1808055811607556,
-        "bb_middle": 1.1799985,
-        "bb_lower": 1.1791914188392443,
-        "atr": 0.000784927931754367,
-        "adx": 35.009718477129276
+        "close": 1.17877,
+        "high": 1.17888,
+        "low": 1.17858,
+        "ema_9": 1.178980629053778,
+        "ema_21": 1.1786206694259704,
+        "ema_50": 1.1763414644569123,
+        "ema_200": 1.1665757342385827,
+        "rsi": 55.05320142914682,
+        "macd": 0.0007282971456754606,
+        "macd_signal": 0.0010972992463116073,
+        "macd_hist": -0.00036900210063614677,
+        "bb_upper": 1.1805722048186558,
+        "bb_middle": 1.1793879999999999,
+        "bb_lower": 1.178203795181344,
+        "atr": 0.0009594734088670192,
+        "adx": 40.579977777680284
     },
     "signal": {
         "type": "HOLD",
         "details": {
             "trend": [
-                "UP",
+                "STRONG_UPTREND",
                 true
             ],
-            "rsi": [
-                "INVALID (46.9)",
+            "momentum": [
+                "BULLISH_WEAK",
                 false
             ],
-            "macd": [
-                "REJECT",
+            "structure": [
+                "SQUEEZED_BANDS",
                 false
             ],
-            "adx": [
-                "STRONG",
-                true
-            ],
-            "bb": [
-                "VALID",
-                true
-            ],
-            "atr": [
-                "VALID",
-                true
-            ],
-            "mtf": [
-                "UPTREND (H1)",
+            "price_action": [
+                "BULLISH_STRUCTURE",
                 true
             ],
             "session": [
-                "OUT OF SESSION",
-                false
-            ],
-            "engulfing": [
-                "NO PATTERN",
+                "OPTIMAL_HOURS",
                 true
             ]
-        }
+        },
+        "confluence_score": 2.7
     },
-    "open_trades": [
-        {
-            "ticket": 4267398512,
-            "type": "BUY",
-            "volume": 0.01,
-            "price_open": 1.1797700000000002,
-            "price_current": 1.1792,
-            "profit": -0.57,
-            "sl": 1.17903,
-            "tp": 1.18151
-        }
-    ],
+    "open_trades": [],
     "history": []
 }

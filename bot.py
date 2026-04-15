@@ -57,8 +57,8 @@ class Config:
     
     # Trading Parameters
     SYMBOL = "EURUSDm"
-    TIMEFRAME = mt5.TIMEFRAME_M15
-    TIMEFRAME_NAME = "M15"
+    TIMEFRAME = mt5.TIMEFRAME_H1 # Switched to H1 for 50%+ Accuracy
+    TIMEFRAME_NAME = "H1"
     H1_TIMEFRAME = mt5.TIMEFRAME_H1
     H1_TIMEFRAME_NAME = "H1"
     LOT_SIZE = 0.01
@@ -88,11 +88,11 @@ class Config:
     ADX_PERIOD = 14
     ADX_THRESHOLD = 25
     
-    SL_MULTIPLIER = 1.0  
-    TP_MULTIPLIER = 2.0  
+    SL_MULTIPLIER = 2.0  
+    TP_MULTIPLIER = 2.0  # 1:1 Risk Reward for 50%+ Accuracy
     
     BE_ACTIVATION_ATR = 1.0
-    TRAILING_STOP_ATR = 1.5
+    TRAILING_STOP_ATR = 2.0
     
     # Risk Management
     MAX_SPREAD = 5
@@ -546,7 +546,9 @@ class IndicatorCalculator:
     
     def _calculate_all_indicators(self):
         """Calculate all indicators on the dataframe."""
-        # EMA 50 and EMA 200
+        # EMAs
+        self.df['EMA_9'] = ta.ema(self.df['close'], length=9)
+        self.df['EMA_21'] = ta.ema(self.df['close'], length=21)
         self.df['EMA_50'] = ta.ema(self.df['close'], length=Config.EMA_FAST)
         self.df['EMA_200'] = ta.ema(self.df['close'], length=Config.EMA_SLOW)
         
@@ -627,6 +629,8 @@ class IndicatorCalculator:
             'close': safe_get('close'),
             'high': safe_get('high'),
             'low': safe_get('low'),
+            'ema_9': safe_get('EMA_9'),
+            'ema_21': safe_get('EMA_21'),
             'ema_50': safe_get('EMA_50'),
             'ema_200': safe_get('EMA_200'),
             'rsi': safe_get('RSI'),
@@ -918,55 +922,43 @@ class SignalGenerator:
     @staticmethod
     def generate_signal(indicators: dict, h1_data: dict, hour: int, df: pd.DataFrame) -> tuple:
         """
-        PROFESSIONAL SIGNAL GENERATION
-        
-        Confluence Rules for 50%+ Win Rate:
-        - Minimum 3.5/5 confluence score
-        - Trend + Momentum + Structure must align
-        - Price action must show conviction
+        Professional confluence-based signal generation.
+        Combines multiple technical filters for high-probability entries.
         """
-        signal_details = {}
+        if pd.isna(indicators.get('close')):
+            return 'HOLD', {}
+
+        # 1. Run all technical checks
+        trend_status = SignalGenerator.check_primary_trend(indicators, h1_data, df)
+        trend_msg, trend_valid, trend_weight = trend_status
         
-        # 1. TREND ANALYSIS (Highest priority)
-        trend_result = SignalGenerator.check_primary_trend(indicators, h1_data, df)
-        trend_dir = trend_result[0]
-        trend_valid = trend_result[1]
-        signal_details['trend'] = (trend_dir, trend_valid)
+        momentum_status = SignalGenerator.check_momentum_confirmation(indicators, trend_msg)
+        structure_status = SignalGenerator.check_volatility_and_structure(indicators, df)
+        pa_status = SignalGenerator.check_price_action(df, trend_msg)
+        session_status = SignalGenerator.check_session_filter(hour)
         
-        # 2. MOMENTUM CONFIRMATION (Must align with trend)
-        momentum_result = SignalGenerator.check_momentum_confirmation(indicators, trend_dir)
-        signal_details['momentum'] = momentum_result
+        # 2. Compile details dictionary
+        details = {
+            'trend': (trend_msg, trend_valid),
+            'momentum': (momentum_status[0], momentum_status[1]),
+            'structure': (structure_status[0], structure_status[1]),
+            'price_action': (pa_status[0], pa_status[1]),
+            'session': (session_status[0], session_status[1]),
+        }
         
-        # 3. STRUCTURE ANALYSIS (Volatility & bands)
-        structure_result = SignalGenerator.check_volatility_and_structure(indicators, df)
-        signal_details['structure'] = structure_result
+        # 3. Calculate confluence score
+        confluence_score = SignalGenerator.check_confluence_score(details)
+        details['confluence_score'] = confluence_score
         
-        # 4. PRICE ACTION (Final confirmation)
-        price_action_result = SignalGenerator.check_price_action(df, trend_dir)
-        signal_details['price_action'] = price_action_result
-        
-        # 5. SESSION FILTER (Liquidity requirement)
-        session_result = SignalGenerator.check_session_filter(hour)
-        signal_details['session'] = session_result
-        
-        # Calculate confluence score
-        confluence_score = SignalGenerator.check_confluence_score(signal_details)
-        signal_details['confluence_score'] = confluence_score
-        
-        # TRADE LOGIC: Only enter on strong confluence
-        MIN_CONFLUENCE = 3.5
-        
-        # Uptrend signal
-        if trend_dir in ['STRONG_UPTREND', 'UPTREND'] and confluence_score >= MIN_CONFLUENCE:
-            if momentum_result[1] and signal_details['session'][1]:
-                return 'BUY', signal_details
-        
-        # Downtrend signal
-        if trend_dir in ['STRONG_DOWNTREND', 'DOWNTREND'] and confluence_score >= MIN_CONFLUENCE:
-            if momentum_result[1] and signal_details['session'][1]:
-                return 'SELL', signal_details
-        
-        return 'HOLD', signal_details
+        # 4. Final signal decision based on confluence
+        signal = 'HOLD'
+        if confluence_score >= 3.5:
+            if 'UP' in trend_msg:
+                signal = 'BUY'
+            elif 'DOWN' in trend_msg:
+                signal = 'SELL'
+                
+        return signal, details
 
 # ============================================================================
 # MT5 CONNECTION MANAGER
@@ -1149,7 +1141,7 @@ class TrendConfirmationBot:
         self.data_file = "bot_data.json"
 
     
-    def export_data(self, indicators: Dict, signal: str, details: Dict):
+    def export_data(self, indicators: Dict, signal: str, details: Dict, h1_data: Dict = None):
         """Export current bot state for the dashboard."""
         try:
             account_info = mt5.account_info()
@@ -1166,13 +1158,14 @@ class TrendConfirmationBot:
                 "config": {
                     "symbol": self.config.SYMBOL,
                     "timeframe": self.config.TIMEFRAME_NAME,
-                    "h1_data": h1_data if 'h1_data' in locals() else {},
+                    "h1_data": h1_data if h1_data else {},
                     "lot_size": self.config.LOT_SIZE,
                 },
                 "indicators": indicators,
                 "signal": {
                     "type": signal,
-                    "details": {k: [v[0], bool(v[1])] for k, v in details.items()}
+                    "details": {k: [v[0], bool(v[1])] for k, v in details.items() if isinstance(v, (tuple, list))},
+                    "confluence_score": details.get('confluence_score', 0)
                 },
                 "open_trades": [],
                 "history": self.history_manager.get_recent_history(20)
@@ -1257,15 +1250,17 @@ class TrendConfirmationBot:
         # Confluence Score
         confluence = details.get('confluence_score', 0)
         logger.info("-" * 80)
-        logger.info(f"CONFLUENCE SCORE: {confluence:.2f}/5.0 | Setup Quality: ", end="")
+        
         if confluence >= 4.5:
-            logger.info("A+ (Excellent)")
+            quality = "A+ (Excellent)"
         elif confluence >= 4.0:
-            logger.info("A (Strong)")
+            quality = "A (Strong)"
         elif confluence >= 3.5:
-            logger.info("B+ (Good)")
+            quality = "B+ (Good)"
         else:
-            logger.info("B (Fair)")
+            quality = "B (Fair)"
+            
+        logger.info(f"CONFLUENCE SCORE: {confluence:.2f}/5.0 | Setup Quality: {quality}")
         
         logger.info("-" * 80)
         logger.info(f"FINAL SIGNAL: {signal}")
@@ -1357,11 +1352,11 @@ class TrendConfirmationBot:
                     continue
                 
                 # Generate signal
-                signal, details = SignalGenerator.generate_signal(indicators, h1_data, hour, df)
+                signal, details = SignalGenerator.generate_signal(indicators, h1_data, hour, calc.df)
                 self.log_signal_analysis(signal, details)
                 
                 # Export data for dashboard
-                self.export_data(indicators, signal, details)
+                self.export_data(indicators, signal, details, h1_data)
                 
                 # Execute trade if signal is BUY or SELL
                 if signal in ['BUY', 'SELL']:
