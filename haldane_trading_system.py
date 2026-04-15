@@ -5,11 +5,6 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
-import alpaca_trade_api as tradeapi
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, LSTM, Dropout
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 import warnings
 import time
 import logging
@@ -23,9 +18,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import Dense, LSTM, Dropout
+    from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+    HAS_TF = True
+except ImportError:
+    HAS_TF = False
+    logger.warning("TensorFlow not found. LSTM model will be disabled.")
+
+try:
+    import alpaca_trade_api as tradeapi
+    HAS_ALPACA = True
+except ImportError:
+    HAS_ALPACA = False
+    logger.warning("Alpaca Trade API not found.")
+
+import MetaTrader5 as mt5
+
 
 class HaldaneTradingSystem:
-    def __init__(self, symbol='SPY', api_key=None, api_secret=None, base_url=None):
+    def __init__(self, symbol='SPY', api_key=None, api_secret=None, base_url=None, mt5_config=None):
         self.symbol = symbol
         self.scaler = StandardScaler()
         self.model = None
@@ -33,6 +47,7 @@ class HaldaneTradingSystem:
         self.api_key = api_key
         self.api_secret = api_secret
         self.base_url = base_url
+        self.mt5_config = mt5_config
         self.api = None
         self.data = None
         self.features = [
@@ -46,11 +61,49 @@ class HaldaneTradingSystem:
         if api_key and api_secret and base_url:
             self.api = tradeapi.REST(api_key, api_secret, base_url, api_version='v2')
 
-    def fetch_data(self, period='2y'):
-        """Fetch historical data from Yahoo Finance"""
+    def fetch_data(self, period='2y', interval=mt5.TIMEFRAME_D1):
+        """Fetch historical data. Uses MT5 if configured, otherwise Yahoo Finance."""
+        if self.mt5_config:
+            return self.fetch_mt5_data(count=500, timeframe=interval)
+        
         logger.info(f"Fetching {period} of data for {self.symbol}")
-        self.data = yf.download(self.symbol, period=period, interval='1d')
+        # Map common forex symbols to Yahoo Finance format
+        yf_symbol = self.symbol
+        if len(yf_symbol) == 6 and yf_symbol.isupper():
+            yf_symbol = f"{yf_symbol[:3]}{yf_symbol[3:]}=X"
+            
+        self.data = yf.download(yf_symbol, period=period, interval='1d')
         logger.info(f"Fetched {len(self.data)} rows of data")
+        return self.data
+
+    def fetch_mt5_data(self, count=500, timeframe=mt5.TIMEFRAME_D1):
+        """Fetch historical data from MetaTrader 5"""
+        if not mt5.terminal_info():
+            if not self.initialize_mt5():
+                return None
+
+        logger.info(f"Fetching {count} bars for {self.symbol} from MT5")
+        rates = mt5.copy_rates_from_pos(self.symbol, timeframe, 0, count)
+        
+        if rates is None or len(rates) == 0:
+            logger.error(f"Failed to fetch data for {self.symbol} from MT5, error={mt5.last_error()}")
+            return None
+
+        df = pd.DataFrame(rates)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('time', inplace=True)
+        
+        # Rename columns to match the system's expectations
+        df.rename(columns={
+            'open': 'Open',
+            'high': 'High',
+            'low': 'Low',
+            'close': 'Close',
+            'tick_volume': 'Volume'
+        }, inplace=True)
+        
+        self.data = df
+        logger.info(f"Fetched {len(self.data)} rows of data from MT5")
         return self.data
 
     def add_technical_indicators(self):
@@ -155,6 +208,9 @@ class HaldaneTradingSystem:
 
     def build_lstm_model(self, input_shape):
         """Build LSTM model for high accuracy predictions"""
+        if not HAS_TF:
+            return None
+            
         model = Sequential()
 
         model.add(LSTM(128, return_sequences=True, input_shape=input_shape))
@@ -193,50 +249,58 @@ class HaldaneTradingSystem:
         """Train the ML model"""
         X_train, X_test, y_train, y_test = self.prepare_data()
 
-        # Build LSTM model
-        self.build_lstm_model(input_shape=(X_train.shape[1], X_train.shape[2]))
+        # Train LSTM model if available
+        if HAS_TF:
+            # Build LSTM model
+            self.build_lstm_model(input_shape=(X_train.shape[1], X_train.shape[2]))
 
-        # Callbacks for better training
-        early_stop = EarlyStopping(
-            monitor='val_loss', patience=10, restore_best_weights=True
-        )
-        reduce_lr = ReduceLROnPlateau(
-            monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6
-        )
+            # Callbacks for better training
+            early_stop = EarlyStopping(
+                monitor='val_loss', patience=10, restore_best_weights=True
+            )
+            reduce_lr = ReduceLROnPlateau(
+                monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6
+            )
 
-        # Train LSTM model
-        history = self.model.fit(
-            X_train, y_train,
-            epochs=epochs,
-            batch_size=batch_size,
-            validation_data=(X_test, y_test),
-            callbacks=[early_stop, reduce_lr],
-            verbose=1
-        )
+            history = self.model.fit(
+                X_train, y_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                validation_data=(X_test, y_test),
+                callbacks=[early_stop, reduce_lr],
+                verbose=1
+            )
+        else:
+            history = None
+            logger.info("Skipping LSTM training (TF not available)")
 
         # Train Random Forest ensemble
         self.train_ensemble_model(X_train, y_train)
 
-        # Evaluate LSTM model
-        y_pred_lstm = (self.model.predict(X_test) > 0.5).astype(int).flatten()
+        # Evaluate LSTM model if available
+        if HAS_TF and self.model:
+            y_pred_lstm = (self.model.predict(X_test) > 0.5).astype(int).flatten()
+            lstm_accuracy = accuracy_score(y_test, y_pred_lstm)
+            logger.info(f"LSTM Accuracy: {lstm_accuracy:.4f}")
+        else:
+            y_pred_lstm = None
+            lstm_accuracy = 0
 
         # Evaluate Random Forest model
         X_test_flat = X_test[:, -1, :]
         y_pred_rf = self.rf_model.predict(X_test_flat)
-
-        # Ensemble prediction (agree-on-buy: both models must predict 1)
-        y_pred_ensemble = ((y_pred_lstm + y_pred_rf) >= 2).astype(int)
-
-        lstm_accuracy = accuracy_score(y_test, y_pred_lstm)
         rf_accuracy = accuracy_score(y_test, y_pred_rf)
-        ensemble_accuracy = accuracy_score(y_test, y_pred_ensemble)
-
-        logger.info(f"LSTM Accuracy: {lstm_accuracy:.4f}")
         logger.info(f"Random Forest Accuracy: {rf_accuracy:.4f}")
+
+        # Ensemble prediction
+        if y_pred_lstm is not None:
+            y_pred_ensemble = ((y_pred_lstm + y_pred_rf) >= 2).astype(int)
+        else:
+            y_pred_ensemble = y_pred_rf
+
+        ensemble_accuracy = accuracy_score(y_test, y_pred_ensemble)
         logger.info(f"Ensemble Accuracy: {ensemble_accuracy:.4f}")
-        print(f"\nLSTM Accuracy: {lstm_accuracy:.4f}")
-        print(f"Random Forest Accuracy: {rf_accuracy:.4f}")
-        print(f"Ensemble Accuracy: {ensemble_accuracy:.4f}")
+        
         print("\nEnsemble Classification Report:")
         print(classification_report(y_test, y_pred_ensemble))
 
@@ -244,7 +308,7 @@ class HaldaneTradingSystem:
 
     def generate_signal(self):
         """Generate trading signal based on latest data using ensemble prediction"""
-        if self.model is None:
+        if self.model is None and self.rf_model is None:
             logger.warning("Model not trained yet. Please train the model first.")
             return None
 
@@ -256,7 +320,10 @@ class HaldaneTradingSystem:
         X_scaled = self.scaler.transform(X.reshape(-1, X.shape[-1])).reshape(X.shape)
 
         # LSTM prediction
-        lstm_prob = self.model.predict(X_scaled, verbose=0)[0][0]
+        lstm_prob = 0.5
+        if HAS_TF and self.model:
+            lstm_prob = self.model.predict(X_scaled, verbose=0)[0][0]
+        
         lstm_pred = int(lstm_prob > 0.5)
 
         # Random Forest prediction
@@ -379,6 +446,80 @@ class HaldaneTradingSystem:
 
         return max(shares, 0)
 
+    def initialize_mt5(self):
+        """Initialize connection to MetaTrader 5"""
+        if not self.mt5_config:
+            logger.error("MT5 configuration missing")
+            return False
+
+        if not mt5.initialize():
+            logger.error(f"mt5.initialize() failed, error code = {mt5.last_error()}")
+            return False
+
+        login = int(self.mt5_config.get('LOGIN'))
+        password = self.mt5_config.get('PASSWORD')
+        server = self.mt5_config.get('SERVER')
+
+        authorized = mt5.login(login=login, password=password, server=server)
+        if authorized:
+            logger.info(f"MT5 authorized successfully for account {login}")
+            return True
+        else:
+            logger.error(f"MT5 login failed, error code = {mt5.last_error()}")
+            return False
+
+    def execute_mt5_trade(self, signal_info, lot_size=0.1):
+        """Execute a trade via MetaTrader 5"""
+        if not mt5.terminal_info():
+            if not self.initialize_mt5():
+                return None
+
+        signal = signal_info['signal']
+        if signal == 'HOLD':
+            return None
+
+        symbol = self.symbol
+        # MT5 often needs suffixes or specific names (e.g., EURUSDm)
+        # We might need to map 'SPY' to whatever it's called in MT5 if it's forex
+        
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            logger.error(f"Failed to get tick for {symbol}")
+            return None
+
+        order_type = mt5.ORDER_TYPE_BUY if signal == 'BUY' else mt5.ORDER_TYPE_SELL
+        price = tick.ask if signal == 'BUY' else tick.bid
+        
+        # Simple stop loss and take profit (can be refined)
+        atr = float(self.data.iloc[-1]['ATR'])
+        sl_distance = atr * 2.0
+        tp_distance = atr * 3.0
+        
+        sl = price - sl_distance if signal == 'BUY' else price + sl_distance
+        tp = price + tp_distance if signal == 'BUY' else price - tp_distance
+
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": float(lot_size),
+            "type": order_type,
+            "price": price,
+            "sl": sl,
+            "tp": tp,
+            "magic": 234000,
+            "comment": "Haldane Bot Trade",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            logger.error(f"MT5 order_send failed, retcode={result.retcode}")
+            return None
+        
+        logger.info(f"MT5 {signal} order executed for {symbol}: {lot_size} lots at {price}")
+        return result
+
     def execute_trade(self, signal_info, risk_per_trade=0.02):
         """Execute a trade via the Alpaca API.
 
@@ -456,7 +597,7 @@ class HaldaneTradingSystem:
         Returns:
             dict with backtest performance metrics
         """
-        if self.model is None:
+        if self.model is None and self.rf_model is None:
             logger.warning("Model not trained. Train the model before backtesting.")
             return None
 
@@ -473,7 +614,10 @@ class HaldaneTradingSystem:
             X = window.reshape(1, window.shape[0], window.shape[1])
             X_scaled = self.scaler.transform(X.reshape(-1, X.shape[-1])).reshape(X.shape)
 
-            lstm_prob = float(self.model.predict(X_scaled, verbose=0)[0][0])
+            lstm_prob = 0.5
+            if HAS_TF and self.model is not None:
+                lstm_prob = float(self.model.predict(X_scaled, verbose=0)[0][0])
+            
             rf_prob = 0.5
             if self.rf_model is not None:
                 X_flat = X_scaled[:, -1, :]
@@ -544,41 +688,83 @@ class HaldaneTradingSystem:
 
         return results
 
-    def run_live(self, interval_seconds=60, risk_per_trade=0.02, min_confidence=0.15):
-        """Run the trading system in a live loop.
-
-        Fetches fresh data, generates signals, and executes trades at the
-        specified interval.
+    def run_live(self, symbols=['EURUSDm', 'GBPUSDm', 'USDJPYm'], interval_seconds=60, risk_per_trade=0.02, min_confidence=0.15, timeframe=mt5.TIMEFRAME_H1):
+        """Run the trading system in a live loop for multiple symbols.
 
         Args:
+            symbols: list of symbols to trade
             interval_seconds: seconds between each iteration
             risk_per_trade: fraction of equity to risk per trade
             min_confidence: minimum signal confidence to execute a trade
+            timeframe: MT5 timeframe for data fetching
         """
-        logger.info(f"Starting live trading for {self.symbol}")
+        logger.info(f"Starting live trading for {symbols} (Timeframe: {timeframe})")
 
         while True:
             try:
-                # Refresh market data
-                self.fetch_data(period='2y')
-                self.add_technical_indicators()
+                # Count current open positions in MT5
+                positions = mt5.positions_get()
+                total_positions = len(positions) if positions is not None else 0
+                logger.info(f"Current open positions: {total_positions}")
 
-                # Generate signal
-                signal_info = self.generate_signal()
-                if signal_info is None:
-                    logger.warning("No signal generated, skipping cycle")
-                else:
-                    logger.info(
-                        f"Signal: {signal_info['signal']} | "
-                        f"Confidence: {signal_info['confidence']:.2%} | "
-                        f"Price: {signal_info['current_price']}"
-                    )
+                for symbol in symbols:
+                    self.symbol = symbol
+                    
+                    # Refresh market data
+                    self.fetch_data(period='2y', interval=timeframe)
+                    if self.data is None or len(self.data) < 60:
+                        continue
+                        
+                    self.add_technical_indicators()
+
+                    # Generate signal
+                    signal_info = self.generate_signal()
+                    if signal_info is None:
+                        continue
+                    
+                    signal = signal_info['signal']
+                    confidence = signal_info['confidence']
+                    
+                    if signal == 'HOLD':
+                        continue
+
+                    # Trade Limit Logic:
+                    # Default max 2 trades. High confidence (> 0.35) max 4 trades.
+                    max_trades = 2
+                    if confidence > 0.35:
+                        max_trades = 4
+                        logger.info(f"High confidence detected ({confidence:.4f}). Max trades increased to 4.")
+
+                    if total_positions >= max_trades:
+                        logger.info(f"Trade limit reached ({total_positions}/{max_trades}). Skipping {symbol}.")
+                        continue
+
+                    # Check if we already have a position for THIS symbol
+                    has_symbol_pos = False
+                    if positions:
+                        for p in positions:
+                            if p.symbol == symbol:
+                                has_symbol_pos = True
+                                break
+                    
+                    if has_symbol_pos:
+                        # Logic for closing existing position if signal reversed
+                        # (Already handled in execute_mt5_trade if we wanted, 
+                        # but simple version doesn't stack same symbol)
+                        continue
 
                     # Execute trade if confidence meets minimum threshold
-                    if signal_info['confidence'] >= min_confidence:
-                        self.execute_trade(signal_info, risk_per_trade)
+                    if confidence >= min_confidence:
+                        if self.mt5_config:
+                            # Default lot size for MT5, can be refined
+                            self.execute_mt5_trade(signal_info, lot_size=0.1)
+                            # Update positions count after execution
+                            new_positions = mt5.positions_get()
+                            total_positions = len(new_positions) if new_positions is not None else 0
+                        else:
+                            self.execute_trade(signal_info, risk_per_trade)
                     else:
-                        logger.info("Confidence too low – skipping trade")
+                        logger.info(f"Confidence {confidence:.4f} too low for {symbol} – skipping")
 
             except Exception as e:
                 logger.error(f"Error in live loop: {e}")
@@ -593,22 +779,47 @@ class HaldaneTradingSystem:
 if __name__ == '__main__':
     import os
 
-    symbol = os.environ.get('TRADE_SYMBOL', 'SPY')
+    def load_mt5_config(file_path):
+        config = {}
+        if os.path.exists(file_path):
+            with open(file_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        config[key.strip()] = value.strip().strip('"').strip("'")
+        return config
+
+    symbol = os.environ.get('TRADE_SYMBOL', 'EURUSDm')  # Changed default to a common MT5 symbol
     api_key = os.environ.get('ALPACA_API_KEY')
     api_secret = os.environ.get('ALPACA_API_SECRET')
     base_url = os.environ.get(
         'ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'
     )
+    
+    mt5_conf = load_mt5_config('config')
+    
+    # Timeframe mapping
+    TF_MAPPING = {
+        'H1': mt5.TIMEFRAME_H1,
+        'H4': mt5.TIMEFRAME_H4,
+        'D1': mt5.TIMEFRAME_D1,
+        'M15': mt5.TIMEFRAME_M15,
+        'M5': mt5.TIMEFRAME_M5
+    }
+    tf_str = os.environ.get('TRADE_TIMEFRAME', 'H1')
+    timeframe = TF_MAPPING.get(tf_str, mt5.TIMEFRAME_H1)
 
     trader = HaldaneTradingSystem(
         symbol=symbol,
         api_key=api_key,
         api_secret=api_secret,
-        base_url=base_url
+        base_url=base_url,
+        mt5_config=mt5_conf
     )
 
     # 1. Fetch data and compute indicators
-    trader.fetch_data(period='2y')
+    trader.fetch_data(period='2y', interval=timeframe)
     trader.add_technical_indicators()
 
     # 2. Train models
@@ -628,5 +839,6 @@ if __name__ == '__main__':
         for k, v in backtest.items():
             print(f"  {k}: {v}")
 
-    # 5. Optionally start live trading (uncomment to enable)
-    # trader.run_live(interval_seconds=300)
+    # 5. Start live trading for multiple symbols
+    symbols_to_trade = ['EURUSDm', 'GBPUSDm', 'USDJPYm']
+    trader.run_live(symbols=symbols_to_trade, interval_seconds=300, timeframe=timeframe)

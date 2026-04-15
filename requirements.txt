@@ -4,3 +4,4 @@ yfinance>=0.2.18
 scikit-learn>=1.2.0
 alpaca-trade-api>=3.0.0
 tensorflow>=2.12.1
+MetaTrader5>=5.0.45
