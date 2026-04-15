@@ -224,7 +224,7 @@ class HaldaneTradingSystem:
         X_test_flat = X_test[:, -1, :]
         y_pred_rf = self.rf_model.predict(X_test_flat)
 
-        # Ensemble prediction (majority vote)
+        # Ensemble prediction (agree-on-buy: both models must predict 1)
         y_pred_ensemble = ((y_pred_lstm + y_pred_rf) >= 2).astype(int)
 
         lstm_accuracy = accuracy_score(y_test, y_pred_lstm)
@@ -369,7 +369,7 @@ class HaldaneTradingSystem:
         # Position size = risk amount / stop distance
         shares = int(risk_amount / stop_distance)
 
-        # Cap at 10 % of equity in a single position
+        # Cap at 10% of equity in a single position
         max_shares = int((equity * 0.10) / current_price)
         shares = min(shares, max_shares)
 
@@ -544,7 +544,7 @@ class HaldaneTradingSystem:
 
         return results
 
-    def run_live(self, interval_seconds=60, risk_per_trade=0.02):
+    def run_live(self, interval_seconds=60, risk_per_trade=0.02, min_confidence=0.15):
         """Run the trading system in a live loop.
 
         Fetches fresh data, generates signals, and executes trades at the
@@ -553,6 +553,7 @@ class HaldaneTradingSystem:
         Args:
             interval_seconds: seconds between each iteration
             risk_per_trade: fraction of equity to risk per trade
+            min_confidence: minimum signal confidence to execute a trade
         """
         logger.info(f"Starting live trading for {self.symbol}")
 
@@ -573,8 +574,8 @@ class HaldaneTradingSystem:
                         f"Price: {signal_info['current_price']}"
                     )
 
-                    # Execute trade if confidence is sufficient
-                    if signal_info['confidence'] >= 0.15:
+                    # Execute trade if confidence meets minimum threshold
+                    if signal_info['confidence'] >= min_confidence:
                         self.execute_trade(signal_info, risk_per_trade)
                     else:
                         logger.info("Confidence too low – skipping trade")
