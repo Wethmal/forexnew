@@ -1,64 +1,247 @@
 {
-    "timestamp": "2026-04-15 09:59:29",
+    "timestamp": "2026-04-15 11:05:10",
     "account": {
         "balance": 10.26,
-        "equity": 10.26,
+        "equity": 9.92,
         "company": "Exness Technologies Ltd",
         "currency": "USD"
     },
-    "config": {
-        "symbol": "EURUSDm",
-        "timeframe": "H1",
-        "h1_data": {
-            "close": 1.17877,
-            "ema_200": 1.1665757342385827
+    "symbols": {
+        "EURUSDm": {
+            "config": {
+                "symbol": "EURUSDm",
+                "timeframe": "H1",
+                "h1_data": {
+                    "close": 1.17905,
+                    "ema_200": 1.1666887130131733
+                },
+                "lot_size": 0.01
+            },
+            "indicators": {
+                "close": 1.17905,
+                "high": 1.1798,
+                "low": 1.1788,
+                "ema_9": 1.1790025032430225,
+                "ema_21": 1.1786638317095435,
+                "ema_50": 1.1764495852607986,
+                "ema_200": 1.1666887130131733,
+                "rsi": 57.10941282288183,
+                "macd": 0.0006820081930154487,
+                "macd_signal": 0.0010148792091693303,
+                "macd_hist": -0.0003328710161538816,
+                "bb_upper": 1.1805633906813369,
+                "bb_middle": 1.1794004999999999,
+                "bb_lower": 1.1782376093186628,
+                "atr": 0.000965021225636474,
+                "adx": 39.462946702534545
+            },
+            "signal": {
+                "type": "HOLD",
+                "details": {
+                    "trend": [
+                        "NONE",
+                        true
+                    ],
+                    "structure": [
+                        "SNIPER",
+                        true
+                    ],
+                    "momentum": [
+                        "RSI_CONFIRMED",
+                        true
+                    ],
+                    "price_action": [
+                        "BREAKOUT",
+                        true
+                    ],
+                    "session": [
+                        "ACTIVE",
+                        true
+                    ]
+                },
+                "confluence_score": 0.0
+            },
+            "open_trades": []
         },
-        "lot_size": 0.01
-    },
-    "indicators": {
-        "close": 1.17877,
-        "high": 1.17888,
-        "low": 1.17858,
-        "ema_9": 1.178980629053778,
-        "ema_21": 1.1786206694259704,
-        "ema_50": 1.1763414644569123,
-        "ema_200": 1.1665757342385827,
-        "rsi": 55.05320142914682,
-        "macd": 0.0007282971456754606,
-        "macd_signal": 0.0010972992463116073,
-        "macd_hist": -0.00036900210063614677,
-        "bb_upper": 1.1805722048186558,
-        "bb_middle": 1.1793879999999999,
-        "bb_lower": 1.178203795181344,
-        "atr": 0.0009594734088670192,
-        "adx": 40.579977777680284
-    },
-    "signal": {
-        "type": "HOLD",
-        "details": {
-            "trend": [
-                "STRONG_UPTREND",
-                true
-            ],
-            "momentum": [
-                "BULLISH_WEAK",
-                false
-            ],
-            "structure": [
-                "SQUEEZED_BANDS",
-                false
-            ],
-            "price_action": [
-                "BULLISH_STRUCTURE",
-                true
-            ],
-            "session": [
-                "OPTIMAL_HOURS",
-                true
+        "USDJPYm": {
+            "config": {
+                "symbol": "USDJPYm",
+                "timeframe": "H1",
+                "h1_data": {
+                    "close": 158.946,
+                    "ema_200": 159.17597658532353
+                },
+                "lot_size": 0.01
+            },
+            "indicators": {
+                "close": 158.946,
+                "high": 158.994,
+                "low": 158.908,
+                "ema_9": 158.9206949791208,
+                "ema_21": 158.93265002524436,
+                "ema_50": 159.05633419742423,
+                "ema_200": 159.17597658532353,
+                "rsi": 49.072923143048286,
+                "macd": -0.045598927569983516,
+                "macd_signal": -0.08635924576837481,
+                "macd_hist": 0.04076031819839129,
+                "bb_upper": 159.0257972743884,
+                "bb_middle": 158.84595000000002,
+                "bb_lower": 158.66610272561164,
+                "atr": 0.1374433085229605,
+                "adx": 28.229210313417283
+            },
+            "signal": {
+                "type": "HOLD",
+                "details": {
+                    "trend": [
+                        "NONE",
+                        true
+                    ],
+                    "structure": [
+                        "SNIPER",
+                        true
+                    ],
+                    "momentum": [
+                        "RSI_CONFIRMED",
+                        true
+                    ],
+                    "price_action": [
+                        "BREAKOUT",
+                        true
+                    ],
+                    "session": [
+                        "ACTIVE",
+                        true
+                    ]
+                },
+                "confluence_score": 0.0
+            },
+            "open_trades": []
+        },
+        "GBPUSDm": {
+            "config": {
+                "symbol": "GBPUSDm",
+                "timeframe": "H1",
+                "h1_data": {
+                    "close": 1.35683,
+                    "ema_200": 1.339454838470611
+                },
+                "lot_size": 0.01
+            },
+            "indicators": {
+                "close": 1.35683,
+                "high": 1.3578299999999999,
+                "low": 1.35667,
+                "ema_9": 1.356670682908228,
+                "ema_21": 1.355832808542735,
+                "ema_50": 1.3524486620337524,
+                "ema_200": 1.339454838470611,
+                "rsi": 61.2641494868236,
+                "macd": 0.0013072904006723451,
+                "macd_signal": 0.0017034246827862154,
+                "macd_hist": -0.00039613428211387027,
+                "bb_upper": 1.3585343116299322,
+                "bb_middle": 1.356909,
+                "bb_lower": 1.3552836883700676,
+                "atr": 0.0011883885009917987,
+                "adx": 41.67620520572995
+            },
+            "signal": {
+                "type": "HOLD",
+                "details": {
+                    "trend": [
+                        "NONE",
+                        true
+                    ],
+                    "structure": [
+                        "SNIPER",
+                        true
+                    ],
+                    "momentum": [
+                        "RSI_CONFIRMED",
+                        true
+                    ],
+                    "price_action": [
+                        "BREAKOUT",
+                        true
+                    ],
+                    "session": [
+                        "ACTIVE",
+                        true
+                    ]
+                },
+                "confluence_score": 0.0
+            },
+            "open_trades": []
+        },
+        "AUDUSDm": {
+            "config": {
+                "symbol": "AUDUSDm",
+                "timeframe": "H1",
+                "h1_data": {
+                    "close": 0.71392,
+                    "ema_200": 0.7021028438796583
+                },
+                "lot_size": 0.01
+            },
+            "indicators": {
+                "close": 0.71392,
+                "high": 0.71435,
+                "low": 0.71325,
+                "ema_9": 0.713066450849189,
+                "ema_21": 0.7123388205508334,
+                "ema_50": 0.7103751570388235,
+                "ema_200": 0.7021028438796583,
+                "rsi": 68.57268355707798,
+                "macd": 0.0009454148585008593,
+                "macd_signal": 0.001064443626590968,
+                "macd_hist": -0.00011902876809010863,
+                "bb_upper": 0.7140908186172776,
+                "bb_middle": 0.7129544999999999,
+                "bb_lower": 0.7118181813827222,
+                "atr": 0.0008280359341313583,
+                "adx": 28.193537651114394
+            },
+            "signal": {
+                "type": "BUY",
+                "details": {
+                    "trend": [
+                        "NONE",
+                        true
+                    ],
+                    "structure": [
+                        "SNIPER",
+                        true
+                    ],
+                    "momentum": [
+                        "RSI_CONFIRMED",
+                        true
+                    ],
+                    "price_action": [
+                        "BREAKOUT",
+                        true
+                    ],
+                    "session": [
+                        "ACTIVE",
+                        true
+                    ]
+                },
+                "confluence_score": 5.0
+            },
+            "open_trades": [
+                {
+                    "ticket": 4273148004,
+                    "type": "BUY",
+                    "volume": 0.01,
+                    "price_open": 0.7142600000000001,
+                    "price_current": 0.71392,
+                    "profit": -0.34,
+                    "sl": 0.71293,
+                    "tp": 0.715
+                }
             ]
-        },
-        "confluence_score": 2.7
+        }
     },
-    "open_trades": [],
     "history": []
 }

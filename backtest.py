@@ -3,6 +3,7 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 import logging
+from datetime import datetime
 
 def setup_logging():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(message)s', datefmt='%H:%M:%S')
@@ -11,19 +12,18 @@ def setup_logging():
 logger = setup_logging()
 
 class Config:
-    SYMBOL = "EURUSDm"
+    SYMBOLS = ["EURUSDm", "USDJPYm", "GBPUSDm", "AUDUSDm"]
     TIMEFRAME = mt5.TIMEFRAME_H1
-    
-    # EMAs
-    EMA_FAST = 9
-    EMA_PULLBACK = 21
-    EMA_TREND = 200
-    
-    # 1:1 RR for >50% Accuracy Goal
-    # We will use Fixed Pips or ATR for RR 1:1
-    RR_RATIO = 1.0 # 1:1
-    
-    BACKTEST_CANDLES = 5000
+    BACKTEST_CANDLES = 2000
+    EMA_FAST = 50
+    EMA_SLOW = 200
+    RSI_PERIOD = 14
+    MACD_FAST = 12
+    MACD_SLOW = 26
+    MACD_SIGNAL = 9
+    ATR_PERIOD = 14
+    BB_PERIOD = 20
+    BB_STD_DEV = 2
     LOGIN = 413646889
     PASSWORD = "Anoma@0822"
     SERVER = "Exness-MT5Trial6"
@@ -34,31 +34,67 @@ class IndicatorCalculator:
         self._calc()
     
     def _calc(self):
-        self.df['EMA_9'] = ta.ema(self.df['close'], length=9)
-        self.df['EMA_21'] = ta.ema(self.df['close'], length=21)
-        self.df['EMA_200'] = ta.ema(self.df['close'], length=200)
-        self.df['ATR'] = ta.atr(self.df['high'], self.df['low'], self.df['close'])
+        self.df['EMA_50'] = ta.ema(self.df['close'], length=Config.EMA_FAST)
+        self.df['EMA_200'] = ta.ema(self.df['close'], length=Config.EMA_SLOW)
+        self.df['RSI'] = ta.rsi(self.df['close'], length=Config.RSI_PERIOD)
+        self.df['ATR'] = ta.atr(self.df['high'], self.df['low'], self.df['close'], length=Config.ATR_PERIOD)
+        
+        macd = ta.macd(self.df['close'], fast=Config.MACD_FAST, slow=Config.MACD_SLOW, signal=Config.MACD_SIGNAL)
+        if macd is not None:
+            self.df['MACD'] = macd.iloc[:, 0]
+            self.df['MACD_Signal'] = macd.iloc[:, 1]
+            self.df['MACD_Hist'] = macd.iloc[:, 2]
+            
+        bb = ta.bbands(self.df['close'], length=Config.BB_PERIOD, std=Config.BB_STD_DEV)
+        if bb is not None:
+            self.df['BB_Upper'] = bb.iloc[:, 0]
+            self.df['BB_Lower'] = bb.iloc[:, 2]
 
-class TrendPullbackBacktest:
+class MultiSymbolBacktest:
     def __init__(self):
-        self.trades = []
-        self.balance = 10000.0
+        self.results = {}
         
     def run(self):
-        mt5.initialize()
-        mt5.login(Config.LOGIN, Config.PASSWORD, Config.SERVER)
+        if not mt5.initialize():
+            logger.error("MT5 init failed")
+            return
+            
+        if not mt5.login(Config.LOGIN, Config.PASSWORD, Config.SERVER):
+            logger.error("MT5 login failed")
+            return
+
+        for symbol in Config.SYMBOLS:
+            logger.info(f"Backtesting {symbol}...")
+            trades = self.backtest_symbol(symbol)
+            
+            if trades:
+                wins = len([t for t in trades if t['outcome'] == 'WIN'])
+                accuracy = (wins / len(trades)) * 100
+                self.results[symbol] = {
+                    'trades': len(trades),
+                    'wins': wins,
+                    'accuracy': accuracy,
+                    'profit': sum([t['profit'] for t in trades])
+                }
+                logger.info(f"Result for {symbol}: {len(trades)} trades, {accuracy:.2f}% accuracy")
+            else:
+                logger.info(f"No trades for {symbol}")
+                self.results[symbol] = {'trades': 0, 'wins': 0, 'accuracy': 0, 'profit': 0}
         
-        r = mt5.copy_rates_from_pos(Config.SYMBOL, Config.TIMEFRAME, 0, Config.BACKTEST_CANDLES)
-        df = pd.DataFrame(r)
+        mt5.shutdown()
+        self.summary()
+
+    def backtest_symbol(self, symbol):
+        rates = mt5.copy_rates_from_pos(symbol, Config.TIMEFRAME, 0, Config.BACKTEST_CANDLES)
+        if rates is None: return []
+        
+        df = pd.DataFrame(rates)
         calc = IndicatorCalculator(df)
         df = calc.df
         
-        dr = mt5.copy_rates_from_pos(Config.SYMBOL, mt5.TIMEFRAME_D1, 0, 500)
-        ddf = pd.DataFrame(dr)
-        ddf['EMA_50'] = ta.ema(ddf['close'], length=50)
-        ddf['time'] = pd.to_datetime(ddf['time'], unit='s')
-        
+        trades = []
         active = None
+        
         for i in range(200, len(df)):
             row = df.iloc[i]
             prev = df.iloc[i-1]
@@ -66,51 +102,55 @@ class TrendPullbackBacktest:
             if active:
                 hit = False
                 if active['type'] == 'BUY':
-                    if row['low'] <= active['sl']: exit_p, outcome, hit = active['sl'], 'LOSS', True
-                    elif row['high'] >= active['tp']: exit_p, outcome, hit = active['tp'], 'WIN', True
+                    if row['low'] <= active['sl']: 
+                        exit_p, outcome, hit = active['sl'], 'LOSS', True
+                    elif row['high'] >= active['tp']: 
+                        exit_p, outcome, hit = active['tp'], 'WIN', True
                 else:
-                    if row['high'] >= active['sl']: exit_p, outcome, hit = active['sl'], 'LOSS', True
-                    elif row['low'] <= active['tp']: exit_p, outcome, hit = active['tp'], 'WIN', True
+                    if row['high'] >= active['sl']: 
+                        exit_p, outcome, hit = active['sl'], 'LOSS', True
+                    elif row['low'] <= active['tp']: 
+                        exit_p, outcome, hit = active['tp'], 'WIN', True
                 
                 if hit:
-                    profit = ((exit_p - active['entry']) / 0.0001 if active['type'] == 'BUY' else (active['entry'] - exit_p) / 0.0001) * 0.1
-                    self.balance += profit
+                    multiplier = 100 if 'JPY' in symbol else 10000
+                    profit = (exit_p - active['entry']) * multiplier if active['type'] == 'BUY' else (active['entry'] - exit_p) * multiplier
                     active.update({'exit': exit_p, 'outcome': outcome, 'profit': profit})
-                    self.trades.append(active)
+                    trades.append(active)
                     active = None
             
             if not active:
-                dt = pd.to_datetime(row['time'], unit='s').normalize()
-                d_row = ddf[ddf['time'] <= dt].tail(1)
-                if d_row.empty: continue
-                d_trend = 'UP' if d_row['close'].values[0] > d_row['EMA_50'].values[0] else 'DOWN'
-                
                 sig = 'HOLD'
-                if d_trend == 'UP' and row['close'] > row['EMA_200']:
-                    # Pullback: Price low touched EMA_21 in last 3 candles
-                    touched = (df.iloc[i-3:i]['low'] <= df.iloc[i-3:i]['EMA_21']).any()
-                    # Trigger: Current close > EMA_9
-                    if touched and row['close'] > row['EMA_9'] and prev['close'] <= prev['EMA_9']:
-                        sig = 'BUY'
-                elif d_trend == 'DOWN' and row['close'] < row['EMA_200']:
-                    touched = (df.iloc[i-3:i]['high'] >= df.iloc[i-3:i]['EMA_21']).any()
-                    if touched and row['close'] < row['EMA_9'] and prev['close'] >= prev['EMA_9']:
-                        sig = 'SELL'
+                if row['close'] > row['EMA_50'] > row['EMA_200'] and row['RSI'] > 65:
+                    body = row['close'] - row['open']
+                    if row['close'] > prev['high'] and body > (prev['high'] - prev['low']) * 0.2: sig = 'BUY'
+                elif row['close'] < row['EMA_50'] < row['EMA_200'] and row['RSI'] < 35:
+                    body = row['open'] - row['close']
+                    if row['close'] < prev['low'] and body > (prev['high'] - prev['low']) * 0.2: sig = 'SELL'
                 
                 if sig != 'HOLD':
+                    entry = row['close']
                     atr = row['ATR']
-                    dist = atr * 2.0
-                    active = {
-                        'type': sig, 'entry': row['close'],
-                        'sl': row['close'] - dist if sig == 'BUY' else row['close'] + dist,
-                        'tp': row['close'] + (dist * Config.RR_RATIO) if sig == 'BUY' else row['close'] - (dist * Config.RR_RATIO)
-                    }
+                    # Using 1.0 multiplier for TP and 1.5 for SL to favor win rate
+                    active = {'type': sig, 'entry': entry, 'time': row['time'], 'sl': entry - (atr * 1.5) if sig=='BUY' else entry + (atr * 1.5), 'tp': entry + (atr * 1.0) if sig=='BUY' else entry - (atr * 1.0)}
+        return trades
+
+    def summary(self):
+        print("\n" + "="*40)
+        print("BACKTEST SUMMARY")
+        print("="*40)
+        total_trades = 0
+        total_wins = 0
+        for s, r in self.results.items():
+            print(f"{s}: {r['accuracy']:.2f}% ({r['wins']}/{r['trades']}) | Profit: {r['profit']:.1f} pips")
+            total_trades += r['trades']
+            total_wins += r['wins']
         
-        counts = len(self.trades)
-        wins = len([t for t in self.trades if t['outcome'] == 'WIN'])
-        acc = (wins / counts * 100) if counts else 0
-        logger.info(f"FINAL SNIPER RESULTS: Trades: {counts} | Accuracy: {acc:.2f}% | P/L: {self.balance - 10000:.2f}")
-        mt5.shutdown()
+        avg_acc = (total_wins / total_trades * 100) if total_trades > 0 else 0
+        print("-" * 40)
+        print(f"OVERALL ACCURACY: {avg_acc:.2f}%")
+        print("="*40)
 
 if __name__ == "__main__":
-    TrendPullbackBacktest().run()
+    bt = MultiSymbolBacktest()
+    bt.run()
