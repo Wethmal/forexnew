@@ -1,36 +1,42 @@
+
 import MetaTrader5 as mt5
 import os
 
-def load_mt5_config(file_path):
-    config = {}
-    if os.path.exists(file_path):
-        with open(file_path, 'r') as f:
+def check_symbols():
+    # Load config manually
+    creds = {}
+    if os.path.exists("config"):
+        with open("config", "r") as f:
             for line in f:
                 line = line.strip()
-                if '=' in line:
-                    key, value = line.split('=', 1)
-                    config[key.strip()] = value.strip().strip('"').strip("'")
-    return config
+                if "=" in line:
+                    key, val = line.split("=", 1)
+                    creds[key.strip().upper()] = val.strip().strip('"')
+    
+    login = int(creds.get("LOGIN", 0))
+    password = creds.get("PASSWORD", "")
+    server = creds.get("SERVER", "")
+    
+    mt5.initialize()
+    mt5.login(login=login, password=password, server=server)
+    
+    symbols = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"]
+    suffixes = ["", "m", "+", "."]
+    
+    print("Checking Symbols:")
+    for sym in symbols:
+        found = False
+        for suffix in suffixes:
+            full_sym = sym + suffix
+            info = mt5.symbol_info(full_sym)
+            if info:
+                print(f"  FOUND: {full_sym} (Digits: {info.digits})")
+                found = True
+                break
+        if not found:
+            print(f"  NOT FOUND: {sym} with common suffixes")
 
-mt5_conf = load_mt5_config('config')
+    mt5.shutdown()
 
-if not mt5.initialize():
-    print("initialize() failed")
-    quit()
-
-login = int(mt5_conf.get('LOGIN'))
-password = mt5_conf.get('PASSWORD')
-server = mt5_conf.get('SERVER')
-
-authorized = mt5.login(login=login, password=password, server=server)
-if authorized:
-    print(f"Logged in to {login}")
-    symbols = mt5.symbols_get()
-    print(f"Total symbols: {len(symbols)}")
-    # Print first 20 symbols
-    for s in symbols[:50]:
-        print(s.name)
-else:
-    print("Login failed")
-
-mt5.shutdown()
+if __name__ == "__main__":
+    check_symbols()

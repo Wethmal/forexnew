@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Haldane Trading Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .buy-gradient { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
+        .sell-gradient { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }
+        .hold-gradient { background: linear-gradient(135deg, #64748b 0%, #475569 100%); }
+        .animate-pulse-slow { animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    </style>
+</head>
+<body class="p-4 md:p-8 min-h-screen">
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+            <div>
+                <h1 class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">Haldane AI Bot</h1>
+                <p class="text-slate-400 text-sm mt-1 flex items-center">
+                    <span id="status-dot" class="w-2 h-2 rounded-full bg-emerald-500 mr-2 animate-pulse"></span>
+                    Live Trading System <span class="mx-2">•</span> <span id="last-update">Syncing...</span>
+                </p>
+            </div>
+            <div class="flex gap-4">
+                <div class="glass px-4 py-2 rounded-xl">
+                    <p class="text-xs text-slate-400 uppercase tracking-wider font-semibold">Account</p>
+                    <p id="account-id" class="text-lg font-mono text-blue-300">-----</p>
+                </div>
+                <div class="glass px-4 py-2 rounded-xl border-emerald-500/30">
+                    <p class="text-xs text-slate-400 uppercase tracking-wider font-semibold">Equity</p>
+                    <p id="total-equity" class="text-lg font-bold text-emerald-400">$0.00</p>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Stats Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <div class="glass p-6 rounded-2xl">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="p-2 bg-blue-500/20 rounded-lg"><i class="fas fa-wallet text-blue-400 text-xl"></i></div>
+                    <span class="text-slate-500 text-xs font-semibold">BALANCE</span>
+                </div>
+                <h3 id="balance" class="text-2xl font-bold font-mono">$0.00</h3>
+            </div>
+            <div class="glass p-6 rounded-2xl">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="p-2 bg-emerald-500/20 rounded-lg"><i class="fas fa-chart-line text-emerald-400 text-xl"></i></div>
+                    <span class="text-slate-500 text-xs font-semibold">FLOATING PROFIT</span>
+                </div>
+                <h3 id="floating-profit" class="text-2xl font-bold font-mono text-emerald-400">$0.00</h3>
+            </div>
+            <div class="glass p-6 rounded-2xl">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="p-2 bg-purple-500/20 rounded-lg"><i class="fas fa-brain text-purple-400 text-xl"></i></div>
+                    <span class="text-slate-500 text-xs font-semibold">CONFIDENCE</span>
+                </div>
+                <h3 id="current-confidence" class="text-2xl font-bold font-mono">0.00%</h3>
+            </div>
+            <div id="signal-card" class="glass p-6 rounded-2xl border-transparent transition-all duration-500">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="p-2 bg-slate-700 rounded-lg"><i class="fas fa-satellite-dish text-slate-300 text-xl"></i></div>
+                    <span class="text-slate-500 text-xs font-semibold">LATEST SIGNAL</span>
+                </div>
+                <h3 id="latest-signal" class="text-2xl font-bold tracking-widest uppercase">WAITING</h3>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Open Positions -->
+            <div class="lg:col-span-2 glass rounded-2xl overflow-hidden">
+                <div class="p-6 border-b border-white/5 flex justify-between items-center">
+                    <h2 class="text-xl font-bold flex items-center">
+                        <i class="fas fa-exchange-alt mr-3 text-blue-400"></i> Open Positions
+                    </h2>
+                    <span id="pos-count" class="bg-blue-500/20 text-blue-400 text-xs px-2 py-1 rounded-full font-bold">0 Active</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-slate-400 text-xs uppercase tracking-wider">
+                            <tr>
+                                <th class="px-6 py-4">Symbol</th>
+                                <th class="px-6 py-4">Side</th>
+                                <th class="px-6 py-4">Volume</th>
+                                <th class="px-6 py-4">Open Price</th>
+                                <th class="px-6 py-4">Current</th>
+                                <th class="px-6 py-4 text-right">Profit</th>
+                            </tr>
+                        </thead>
+                        <tbody id="open-positions-table" class="divide-y divide-white/5">
+                            <!-- Data rows injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Trade History & Insights -->
+            <div class="flex flex-col gap-6 font-Inter">
+                <!-- Insights Card -->
+                <div class="glass p-6 rounded-2xl bg-gradient-to-br from-slate-800/50 to-slate-900/50">
+                    <h2 class="text-lg font-bold mb-4 flex items-center">
+                        <i class="fas fa-lightbulb mr-3 text-yellow-400"></i> AI Insights
+                    </h2>
+                    <div class="space-y-4">
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-400 text-sm">Prediction Score</span>
+                            <span id="pred-score" class="text-emerald-400 font-mono">0.00</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-400 text-sm">RSI Index</span>
+                            <span id="rsi-val" class="text-blue-400 font-mono">0.0</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-400 text-sm">Target Action</span>
+                            <span id="target-action" class="font-bold text-slate-300">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent History -->
+                <div class="glass p-6 rounded-2xl flex-grow overflow-hidden">
+                    <h2 class="text-lg font-bold mb-4 flex items-center">
+                        <i class="fas fa-history mr-3 text-slate-400"></i> Recent Closed
+                    </h2>
+                    <div id="history-list" class="space-y-3 overflow-y-auto max-h-[300px]">
+                        <!-- History items injected here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function updateDashboard() {
+            try {
+                const response = await fetch('dashboard_data.json');
+                if (!response.ok) throw new Error('Network response not ok');
+                const data = await response.json();
+
+                // Header & Summary
+                document.getElementById('last-update').textContent = `Update: ${data.last_update || 'N/A'}`;
+                
+                // Account Info Handling
+                const acc = data.account || {};
+                document.getElementById('account-id').textContent = acc.login || '-----';
+                document.getElementById('balance').textContent = `$${(acc.balance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+                document.getElementById('total-equity').textContent = `$${(acc.equity || data.equity || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+                
+                const floatingProfit = parseFloat(acc.profit || 0);
+                const fpEl = document.getElementById('floating-profit');
+                fpEl.textContent = `${floatingProfit >= 0 ? '+' : ''}$${floatingProfit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+                fpEl.className = `text-2xl font-bold font-mono ${floatingProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+
+                // Signal Card
+                // The bot sends 'latest_signals' as an array. Use the last one.
+                const signals = data.latest_signals || [];
+                const latestSig = signals.length > 0 ? signals[signals.length - 1] : null;
+                const signal = latestSig ? (latestSig.signal || 'WAITING') : 'WAITING';
+                
+                const signalCard = document.getElementById('signal-card');
+                const signalText = document.getElementById('latest-signal');
+                signalText.textContent = signal;
+                
+                if (signal === 'BUY') {
+                    signalCard.className = 'glass p-6 rounded-2xl border-emerald-500 border-2 buy-gradient text-white shadow-[0_0_20px_rgba(16,185,129,0.3)]';
+                } else if (signal === 'SELL') {
+                    signalCard.className = 'glass p-6 rounded-2xl border-red-500 border-2 sell-gradient text-white shadow-[0_0_20px_rgba(239,68,68,0.3)]';
+                } else {
+                    signalCard.className = 'glass p-6 rounded-2xl border-slate-600 border-2 hold-gradient text-white';
+                }
+
+                // AI Stats
+                if (latestSig) {
+                    document.getElementById('current-confidence').textContent = `${((latestSig.confidence || 0) * 100).toFixed(2)}%`;
+                    document.getElementById('pred-score').textContent = (latestSig.confidence || 0).toFixed(4); // Using confidence as score for now
+                    document.getElementById('rsi-val').textContent = (latestSig.rsi || 0).toFixed(1);
+                    document.getElementById('target-action').textContent = latestSig.signal || '--';
+                } else {
+                    document.getElementById('current-confidence').textContent = '0.00%';
+                    document.getElementById('pred-score').textContent = '0.0000';
+                    document.getElementById('rsi-val').textContent = '0.0';
+                    document.getElementById('target-action').textContent = '--';
+                }
+
+                // Table Positions
+                const tableBody = document.getElementById('open-positions-table');
+                tableBody.innerHTML = '';
+                const openPositions = data.open_positions || [];
+                document.getElementById('pos-count').textContent = `${openPositions.length} Active`;
+                
+                openPositions.forEach(pos => {
+                    const row = document.createElement('tr');
+                    const profitClass = pos.profit >= 0 ? 'text-emerald-400' : 'text-red-400';
+                    row.innerHTML = `
+                        <td class="px-6 py-4 font-bold text-slate-200">${pos.symbol}</td>
+                        <td class="px-6 py-4">
+                            <span class="px-2 py-1 rounded-md text-[10px] font-bold ${pos.type === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">
+                                ${pos.type}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 font-mono text-slate-300">${pos.volume}</td>
+                        <td class="px-6 py-4 font-mono text-slate-300 text-sm">${(pos.price_open || 0).toFixed(5)}</td>
+                        <td class="px-6 py-4 font-mono text-slate-300 text-sm">${(pos.price_cur || pos.price_current || 0).toFixed(5)}</td>
+                        <td class="px-6 py-4 text-right font-bold font-mono ${profitClass}">$${(pos.profit || 0).toFixed(2)}</td>
+                    `;
+                    tableBody.appendChild(row);
+                });
+
+                // Recent History (mapping from performance or history list if added)
+                // Note: The bot script doesn't send 'history' in dashboard_data but has trade_log.json
+                // For now, we clear history or display info from performance
+                const historyList = document.getElementById('history-list');
+                historyList.innerHTML = '';
+                if (data.performance && data.performance.total_trades > 0) {
+                     const div = document.createElement('div');
+                     div.className = 'p-3 bg-white/5 rounded-xl border border-white/5';
+                     div.innerHTML = `
+                         <p class="text-sm font-bold text-slate-300">Total Profit Factor: ${data.performance.profit_factor || 'N/A'}</p>
+                         <p class="text-xs text-slate-400">Total PnL: $${data.performance.total_pnl_usd || 0}</p>
+                     `;
+                     historyList.appendChild(div);
+                }
+
+                // Update Status
+                document.getElementById('status-dot').className = 'w-2 h-2 rounded-full bg-emerald-500 mr-2 animate-pulse';
+
+            } catch (err) {
+                console.error('Error fetching dashboard data:', err);
+                document.getElementById('status-dot').className = 'w-2 h-2 rounded-full bg-red-500 mr-2';
+            }
+        }
+
+        // Poll every 3 seconds
+        setInterval(updateDashboard, 3000);
+        updateDashboard();
+    </script>
+</body>
+</html>
