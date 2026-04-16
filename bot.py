@@ -38,6 +38,7 @@ ENV VARS FOR LIVE MT5:
 # -----------------------------------------------------------------------------
 
 import os
+import threading
 import sys
 import json
 import time
@@ -179,7 +180,7 @@ class BotConfig:
     max_positions: int         = 3      # Max simultaneous open trades
     max_daily_loss_pct: float  = 0.03   # Stop trading if daily loss > 3%
     max_position_pct: float    = 0.10   # No single position > 10% of equity
-    trailing_sl_atr: float     = 1.0    # Trail SL by 1× ATR when in profit
+    trailing_sl_atr: float     = 1.5    # Trail SL by 1× ATR when in profit
 
     # -- Execution ------------------------------------------------------------
     live_trading: bool       = False
@@ -519,7 +520,13 @@ class DataFetcher:
             "1d":  mt5.TIMEFRAME_D1,  "1wk": mt5.TIMEFRAME_W1,
         }
         tf = TF_MAP.get(timeframe, mt5.TIMEFRAME_H1)
-        mt5_sym = symbol + self.cfg.mt5_symbol_suffix
+        suffix = self.cfg.mt5_symbol_suffix
+        mt5_sym = symbol if (suffix and symbol.endswith(suffix)) else symbol + suffix
+
+        # Ensure symbol is selected in Market Watch
+        if not mt5.symbol_select(mt5_sym, True):
+            log.error(f"MT5: Cannot select symbol {mt5_sym}")
+            return pd.DataFrame()
 
         rates = mt5.copy_rates_from_pos(mt5_sym, tf, 0, count)
         if rates is None or len(rates) == 0:
@@ -548,7 +555,13 @@ class DataFetcher:
         """Get current spread in pips from MT5 tick data."""
         if not HAS_MT5:
             return 1.0   # Assume 1 pip for paper trading
-        mt5_sym = symbol + self.cfg.mt5_symbol_suffix
+        suffix = self.cfg.mt5_symbol_suffix
+        mt5_sym = symbol if (suffix and symbol.endswith(suffix)) else symbol + suffix
+        
+        # Ensure symbol is selected
+        if not mt5.symbol_select(mt5_sym, True):
+            return 99.0
+
         tick = mt5.symbol_info_tick(mt5_sym)
         if tick is None:
             return 99.0
@@ -556,7 +569,9 @@ class DataFetcher:
         if symbol_info is None:
             return 99.0
         spread_points = tick.ask - tick.bid
-        pip_size = 0.0001 if symbol_info.digits == 5 else 0.01
+        point = symbol_info.point
+        # Standard: 1 pip = 10 points for 3/5 digit brokers, 1 point for 2/4 digit brokers
+        pip_size = 10 * point if symbol_info.digits in [3, 5] else point
         return spread_points / pip_size
 
 
@@ -666,53 +681,53 @@ class SignalEngine:
             # 1. RSI between 45 and 70 (momentum but not overbought)
             if self.cfg.rsi_buy_min <= rsi <= self.cfg.rsi_buy_max:
                 score += 1
-                reasons.append(f"RSI={rsi:.1f} ✓ (buy zone)")
+                reasons.append(f"RSI={rsi:.1f} (OK - buy zone)")
 
             # 2. MACD histogram positive or crossing up
             if macd_hist > 0 or (prev["macd_hist"] < 0 < macd_hist):
                 score += 1
-                reasons.append(f"MACD hist={macd_hist:.5f} ✓ (bullish)")
+                reasons.append(f"MACD hist={macd_hist:.5f} (OK - bullish)")
 
             # 3. Stochastic not overbought, ideally rising
             if stoch_k < 80 and stoch_k > stoch_d:
                 score += 1
-                reasons.append(f"Stoch K={stoch_k:.1f} ✓ (not overbought, K>D)")
+                reasons.append(f"Stoch K={stoch_k:.1f} (OK - not overbought, K>D)")
 
             # 4. Price in lower half of Bollinger Band (room to run)
             if bb_pos < 0.6:
                 score += 1
-                reasons.append(f"BB pos={bb_pos:.2f} ✓ (room to upper band)")
+                reasons.append(f"BB pos={bb_pos:.2f} (OK - room to upper band)")
 
             # 5. ADX > 20 (trending) with +DI > -DI
             if adx > 20 and plus_di > minus_di:
                 score += 1
-                reasons.append(f"ADX={adx:.1f} ✓ (+DI>{minus_di:.1f})")
+                reasons.append(f"ADX={adx:.1f} (OK - +DI>{minus_di:.1f})")
 
         elif trend == "DOWN":
             # 1. RSI between 30 and 55
             if self.cfg.rsi_sell_min <= rsi <= self.cfg.rsi_sell_max:
                 score += 1
-                reasons.append(f"RSI={rsi:.1f} ✓ (sell zone)")
+                reasons.append(f"RSI={rsi:.1f} (OK - sell zone)")
 
             # 2. MACD histogram negative or crossing down
             if macd_hist < 0 or (prev["macd_hist"] > 0 > macd_hist):
                 score += 1
-                reasons.append(f"MACD hist={macd_hist:.5f} ✓ (bearish)")
+                reasons.append(f"MACD hist={macd_hist:.5f} (OK - bearish)")
 
             # 3. Stochastic not oversold, ideally falling
             if stoch_k > 20 and stoch_k < stoch_d:
                 score += 1
-                reasons.append(f"Stoch K={stoch_k:.1f} ✓ (not oversold, K<D)")
+                reasons.append(f"Stoch K={stoch_k:.1f} (OK - not oversold, K<D)")
 
             # 4. Price in upper half of BB (room to fall)
             if bb_pos > 0.4:
                 score += 1
-                reasons.append(f"BB pos={bb_pos:.2f} ✓ (room to lower band)")
+                reasons.append(f"BB pos={bb_pos:.2f} (OK - room to lower band)")
 
             # 5. ADX > 20 with -DI > +DI
             if adx > 20 and minus_di > plus_di:
                 score += 1
-                reasons.append(f"ADX={adx:.1f} ✓ (-DI>{plus_di:.1f})")
+                reasons.append(f"ADX={adx:.1f} (OK - -DI>{plus_di:.1f})")
 
         return score, reasons
 
@@ -848,7 +863,7 @@ class SignalEngine:
         )
 
         log.info(
-            f"SIGNAL ► {signal.signal.value} {symbol} | "
+            f"SIGNAL >> {signal.signal.value} {symbol} | "
             f"Entry={signal.entry_price} SL={signal.stop_loss} TP={signal.take_profit} | "
             f"RR={signal.rr_ratio} Lots={signal.lots} | Score={confluence_score}/5"
         )
@@ -856,35 +871,66 @@ class SignalEngine:
 
     def _calc_lots(self, equity: float, sl_distance: float,
                    symbol: str) -> float:
-        """Fixed fractional position sizing."""
+        """Precision position sizing using MT5 native tick data."""
         cfg = self.cfg
         risk_amount = equity * cfg.risk_per_trade_pct
 
         if sl_distance <= 0:
             return 0.0
 
-        # Pips
-        pip_size = 0.0001
-        if "JPY" in symbol:
-            pip_size = 0.01
-        sl_pips = sl_distance / pip_size
+        # Try to get MT5 precision values
+        mt5_sym = symbol
+        if hasattr(self, "fetcher") and hasattr(self.fetcher, "cfg"):
+            suffix = self.cfg.mt5_symbol_suffix
+            mt5_sym = symbol if (suffix and symbol.endswith(suffix)) else symbol + suffix
 
-        # $10 per pip per standard lot for major pairs
-        pip_value = 10.0
-        if "JPY" in symbol:
-            pip_value = 9.0   # approximate
+        # Default fallback values for paper/backtest
+        tick_value = 1.0  # value of 1 tick for 1 standard lot
+        tick_size  = 0.0001
+        
+        if HAS_MT5 and mt5.terminal_info():
+            info = mt5.symbol_info(mt5_sym)
+            if info:
+                tick_value = info.trade_tick_value
+                tick_size  = info.trade_tick_size
+            else:
+                # Fallback based on name for JPY if MT5 fails
+                if "JPY" in symbol:
+                    tick_size = 0.01
+                    tick_value = 9.0  # Approx for JPY
+        else:
+            # Fallback for paper trading
+            if "JPY" in symbol:
+                tick_size = 0.01
+                tick_value = 9.0
+            else:
+                tick_size = 0.0001
+                tick_value = 10.0
 
-        lots = risk_amount / (sl_pips * pip_value)
+        # sl_distance is in price units (e.g. 0.0050)
+        # Number of ticks in SL = sl_distance / tick_size
+        # Cost per lot = (sl_distance / tick_size) * tick_value
+        try:
+            cost_per_lot = (sl_distance / tick_size) * tick_value
+            if cost_per_lot <= 0:
+                return 0.0
+            
+            lots = risk_amount / cost_per_lot
+        except ZeroDivisionError:
+            return 0.0
 
         # Snap to broker lot step
         lots = round(lots / cfg.lot_step) * cfg.lot_step
         lots = max(cfg.lot_min, min(lots, cfg.lot_max))
 
         # Cap at max_position_pct of equity
-        max_lots_by_equity = (equity * cfg.max_position_pct) / (sl_pips * pip_value)
-        lots = min(lots, max_lots_by_equity)
+        try:
+            max_lots_by_equity = (equity * cfg.max_position_pct) / cost_per_lot
+            lots = min(lots, max_lots_by_equity)
+        except ZeroDivisionError:
+            pass
 
-        return round(lots, 2)
+        return round(float(lots), 2)
 
 
 # -----------------------------------------------------------------------------
@@ -1007,7 +1053,10 @@ class TradeExecutor:
 
     # -- MT5 helpers -----------------------------------------------------------
     def _mt5_symbol(self, symbol: str) -> str:
-        return symbol + self.cfg.mt5_symbol_suffix
+        suffix = self.cfg.mt5_symbol_suffix
+        if suffix and symbol.endswith(suffix):
+            return symbol
+        return symbol + suffix
 
     def get_open_positions(self) -> List[dict]:
         """Return list of open positions as dicts."""
@@ -1039,6 +1088,21 @@ class TradeExecutor:
             if p["symbol"] == sym and p["magic"] == self.cfg.mt5_magic:
                 return True
         return False
+
+    def _get_filling_mode(self, symbol: str) -> int:
+        """Determine the correct filling mode for the symbol."""
+        if not HAS_MT5:
+            return 0
+        info = mt5.symbol_info(symbol)
+        if not info or info.filling_mode == 0:
+            return mt5.ORDER_FILLING_IOC
+        
+        filling = info.filling_mode
+        if filling & 1: # SYMBOL_FILLING_FOK
+            return mt5.ORDER_FILLING_FOK
+        elif filling & 2: # SYMBOL_FILLING_IOC
+            return mt5.ORDER_FILLING_IOC
+        return mt5.ORDER_FILLING_RETURN
 
     def execute_mt5(self, signal: TradeSignal) -> bool:
         """Send a market order to MT5."""
@@ -1075,7 +1139,7 @@ class TradeExecutor:
             "magic":        self.cfg.mt5_magic,
             "comment":      self.cfg.mt5_comment,
             "type_time":    mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": self._get_filling_mode(mt5_sym),
         }
 
         # CHECK MARGIN BEFORE SENDING
@@ -1084,11 +1148,12 @@ class TradeExecutor:
             log.error(f"MT5: order_check returned None for {mt5_sym}")
             return False
 
-        if check_result.retcode != mt5.TRADE_RETCODE_DONE:
+        # Acceptance codes for order_check: 0 (Validated) or 10009 (Done/Correct)
+        if check_result.retcode not in [0, 10009, mt5.TRADE_RETCODE_DONE]:
             log.warning(
-                f"MT5: Insufficient margin/invalid order for {mt5_sym}. "
-                f"Required: {check_result.margin}, Available: {check_result.margin_free}. "
-                f"Retcode: {check_result.retcode}"
+                f"MT5: Order validation failed for {mt5_sym}. "
+                f"Retcode: {check_result.retcode}, Comment: {getattr(check_result, 'comment', 'N/A')}. "
+                f"Balance: {mt5.account_info().balance if mt5.account_info() else 'N/A'}"
             )
             return False
 
@@ -1105,7 +1170,7 @@ class TradeExecutor:
             return False
 
         log.info(
-            f"MT5 ORDER PLACED ► {signal.signal.value} {mt5_sym} "
+            f"MT5 ORDER PLACED >> {signal.signal.value} {mt5_sym} "
             f"{signal.lots} lots @ {price:.5f} "
             f"SL={signal.stop_loss:.5f} TP={signal.take_profit:.5f}"
         )
@@ -1114,7 +1179,7 @@ class TradeExecutor:
     def execute_paper(self, signal: TradeSignal) -> bool:
         """Log a paper trade."""
         log.info(
-            f"[PAPER] ► {signal.signal.value} {signal.symbol} "
+            f"[PAPER] >> {signal.signal.value} {signal.symbol} "
             f"{signal.lots} lots @ {signal.entry_price:.5f} | "
             f"SL={signal.stop_loss:.5f} TP={signal.take_profit:.5f} | "
             f"RR={signal.rr_ratio} Confidence={signal.confidence:.0%}"
@@ -1253,26 +1318,29 @@ class TradeLogger:
 
     def __init__(self, cfg: BotConfig):
         self.cfg   = cfg
-        self.trades: List[dict] = []
+        self.lock  = threading.RLock()
         self._load()
 
     def _load(self):
-        if os.path.exists(self.cfg.trade_log_file):
-            try:
-                with open(self.cfg.trade_log_file) as f:
-                    self.trades = json.load(f)
-                log.info(f"Loaded {len(self.trades)} trades from log")
-            except Exception as e:
-                log.error(f"Could not load trade log: {e}")
+        with self.lock:
+            self.trades = []
+            if os.path.exists(self.cfg.trade_log_file):
+                try:
+                    with open(self.cfg.trade_log_file, "r") as f:
+                        self.trades = json.load(f)
+                    log.info(f"Loaded {len(self.trades)} trades from log")
+                except Exception as e:
+                    log.error(f"Could not load trade log: {e}")
 
     def save(self):
-        try:
-            tmp = self.cfg.trade_log_file + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(self.trades, f, indent=2)
-            os.replace(tmp, self.cfg.trade_log_file)
-        except Exception as e:
-            log.error(f"Could not save trade log: {e}")
+        with self.lock:
+            try:
+                tmp = self.cfg.trade_log_file + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(self.trades, f, indent=2)
+                os.replace(tmp, self.cfg.trade_log_file)
+            except Exception as e:
+                log.error(f"Could not save trade log: {e}")
 
     def log_signal(self, signal: TradeSignal):
         entry = signal.to_dict()
@@ -1343,6 +1411,7 @@ class Dashboard:
         self.cfg      = cfg
         self.logger   = logger
         self.executor = executor
+        self.lock     = threading.Lock()
 
     def update(self, latest_signals: List[dict], equity: float = 0.0,
                risk_status: str = "OK"):
@@ -1380,10 +1449,11 @@ class Dashboard:
                 }
 
         try:
-            tmp = self.cfg.dashboard_file + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp, self.cfg.dashboard_file)
+            with self.lock:
+                tmp = self.cfg.dashboard_file + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp, self.cfg.dashboard_file)
         except Exception as e:
             log.error(f"Dashboard write error: {e}")
 
@@ -1495,10 +1565,12 @@ class Backtester:
                         sl = entry + sl_d
                         tp = entry - tp_d
 
-                    lots = max(self.cfg.lot_min, min(
-                        round((capital * self.cfg.risk_per_trade_pct) / (sl_d / 0.0001 * 10.0), 2),
-                        self.cfg.lot_max
-                    ))
+                    pip_size  = 0.01 if "JPY" in symbol else 0.0001
+                    pip_value = 9.0  if "JPY" in symbol else 10.0
+                    
+                    lots = (capital * self.cfg.risk_per_trade_pct) / ((sl_d / pip_size) * pip_value)
+                    lots = round(lots / self.cfg.lot_step) * self.cfg.lot_step
+                    lots = max(self.cfg.lot_min, min(lots, self.cfg.lot_max))
 
                     position = {
                         "side":      signal,
@@ -1679,7 +1751,7 @@ class MT5Manager:
 
         acc = mt5.account_info()
         log.info(
-            f"MT5 connected ► Login={acc.login} Balance={acc.balance:.2f} "
+            f"MT5 connected >> Login={acc.login} Balance={acc.balance:.2f} "
             f"Equity={acc.equity:.2f} Server={acc.server}"
         )
         self.connected = True
@@ -2041,7 +2113,7 @@ def main():
             reason = sig.get("reason", sig.get("reason", "No signal"))
             rr     = sig.get("rr_ratio", "—")
 
-            marker = "►" if s in ("BUY", "SELL") else "·"
+            marker = ">" if s in ("BUY", "SELL") else "."
             print(f"\n  {marker} {symbol}: {s}")
             if s in ("BUY", "SELL"):
                 print(f"    Entry={entry}  SL={sl}  TP={tp}  RR={rr}")
