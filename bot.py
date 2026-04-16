@@ -41,8 +41,6 @@ import os
 import sys
 import json
 import time
-import asyncio
-import threading
 import logging
 import warnings
 import traceback
@@ -51,6 +49,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Tuple
 from enum import Enum
+import threading
 
 import numpy as np
 import pandas as pd
@@ -190,17 +189,7 @@ class BotConfig:
     lot_min: float           = 0.01
     lot_max: float           = 0.50
     lot_step: float          = 0.01
-    spread_max_pips: float   = 1.5     # Default max spread allowed in pips
-    symbol_spread_limits: Dict[str, float] = field(default_factory=lambda: {
-        "EURUSD": 1.2,
-        "GBPUSD": 1.5,
-        "USDJPY": 1.5,
-        "AUDUSD": 1.5,
-        "USDCAD": 1.5,
-        "GBPJPY": 2.5,
-        "EURJPY": 2.0,
-    })
-    mt5_deviation: int       = 10      # Max slippage in points
+    spread_max_pips: float   = 3.0     # Skip trade if spread > 3 pips
 
     # -- Loop timing ----------------------------------------------------------
     interval_seconds: int    = 60
@@ -531,9 +520,8 @@ class DataFetcher:
             "1d":  mt5.TIMEFRAME_D1,  "1wk": mt5.TIMEFRAME_W1,
         }
         tf = TF_MAP.get(timeframe, mt5.TIMEFRAME_H1)
-        mt5_sym = symbol
-        if self.cfg.mt5_symbol_suffix and not symbol.endswith(self.cfg.mt5_symbol_suffix):
-            mt5_sym += self.cfg.mt5_symbol_suffix
+        suffix = self.cfg.mt5_symbol_suffix
+        mt5_sym = symbol if (suffix and symbol.endswith(suffix)) else symbol + suffix
 
         rates = mt5.copy_rates_from_pos(mt5_sym, tf, 0, count)
         if rates is None or len(rates) == 0:
@@ -562,7 +550,8 @@ class DataFetcher:
         """Get current spread in pips from MT5 tick data."""
         if not HAS_MT5:
             return 1.0   # Assume 1 pip for paper trading
-        mt5_sym = symbol + self.cfg.mt5_symbol_suffix
+        suffix = self.cfg.mt5_symbol_suffix
+        mt5_sym = symbol if (suffix and symbol.endswith(suffix)) else symbol + suffix
         tick = mt5.symbol_info_tick(mt5_sym)
         if tick is None:
             return 99.0
@@ -770,11 +759,9 @@ class SignalEngine:
 
         # -- Spread check -----------------------------------------------------
         spread_pips = self.fetcher.get_current_spread_pips(symbol)
-        max_allowed = self.cfg.symbol_spread_limits.get(symbol, self.cfg.spread_max_pips)
-        
-        if spread_pips > max_allowed:
+        if spread_pips > self.cfg.spread_max_pips:
             log.warning(f"{symbol}: spread too wide ({spread_pips:.1f} pips > "
-                        f"{max_allowed}). Skipping.")
+                        f"{self.cfg.spread_max_pips}). Skipping.")
             return None
 
         # -- Macro bias (4H) --------------------------------------------------
@@ -872,53 +859,35 @@ class SignalEngine:
 
     def _calc_lots(self, equity: float, sl_distance: float,
                    symbol: str) -> float:
-        """
-        Dynamic position sizing using MT5 tick value/size.
-        Falls back to approximate pip-value logic for paper trading.
-        """
+        """Fixed fractional position sizing."""
         cfg = self.cfg
         risk_amount = equity * cfg.risk_per_trade_pct
 
         if sl_distance <= 0:
             return 0.0
 
-        per_lot_risk = 0.0
-        
-        # 1. Try to get exact risk from MT5 (Live Mode)
-        if HAS_MT5 and mt5.terminal_info():
-            mt5_sym = symbol + cfg.mt5_symbol_suffix
-            info = mt5.symbol_info(mt5_sym)
-            if info:
-                # trade_tick_value is the value of 1 tick (min price change) for 1 lot in Deposit Currency
-                tv = info.trade_tick_value
-                ts = info.trade_tick_size
-                if tv > 0 and ts > 0:
-                    per_lot_risk = (sl_distance / ts) * tv
-                    log.debug(f"{symbol}: MT5 dynamic per-lot risk calculation used.")
+        # Pips
+        pip_size = 0.0001
+        if "JPY" in symbol:
+            pip_size = 0.01
+        sl_pips = sl_distance / pip_size
 
-        # 2. Fallback to approximate logic (Paper Mode / MT5 Error)
-        if per_lot_risk <= 0:
-            pip_size = 0.01 if "JPY" in symbol else 0.0001
-            # Standard majors are $10/pip/lot. JPY pairs approx $9/pip/lot.
-            pip_val = 9.0 if "JPY" in symbol else 10.0
-            sl_pips = sl_distance / pip_size
-            per_lot_risk = sl_pips * pip_val
-            log.debug(f"{symbol}: Fallback approximate per-lot risk used.")
+        # $10 per pip per standard lot for major pairs
+        pip_value = 10.0
+        if "JPY" in symbol:
+            pip_value = 9.0   # approximate
 
-        # Calculate lots = Risk / (Risk Per Lot)
-        lots = risk_amount / per_lot_risk if per_lot_risk > 0 else 0.0
+        lots = risk_amount / (sl_pips * pip_value)
 
-        # Snap to lot step (usually 0.01) and apply min/max boundaries
+        # Snap to broker lot step
         lots = round(lots / cfg.lot_step) * cfg.lot_step
         lots = max(cfg.lot_min, min(lots, cfg.lot_max))
 
-        # Secondary safety cap: ensure the lot size doesn't exceed max_position_pct of equity
-        max_risk_allowed = equity * cfg.max_position_pct
-        max_lots_by_equity = max_risk_allowed / per_lot_risk if per_lot_risk > 0 else 0
+        # Cap at max_position_pct of equity
+        max_lots_by_equity = (equity * cfg.max_position_pct) / (sl_pips * pip_value)
         lots = min(lots, max_lots_by_equity)
 
         return round(lots, 2)
-
 
 
 # -----------------------------------------------------------------------------
@@ -927,9 +896,11 @@ class SignalEngine:
 
 class MLFilter:
     """
-    Uses a gradient-boosted ensemble trained on historical entry-timeframe
-    bars. Target is whether price hits a 2R Take Profit before a 1.5R Stop Loss.
-    Only activates if HAS_SKL is True.
+    Optional ML layer that adds a probability filter on top of
+    the rule-based signal engine.
+
+    Uses a gradient-boosted ensemble trained on the last 2 years of
+    daily bars. Only activates if HAS_SKL is True.
     """
 
     FEATURE_COLS = [
@@ -953,51 +924,15 @@ class MLFilter:
             log.warning("scikit-learn not installed. ML filter disabled.")
 
     def _build_features(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
-        """Build feature matrix X and target y using 2R TP vs 1.5R SL logic."""
+        """Build feature matrix X and target y from a DataFrame."""
         df = df.copy()
-        
-        if "atr" not in df.columns:
-            return np.array([]), np.array([])
+        # Target: 1 if next close > current close, else 0
+        df["target"] = (df["Close"].shift(-1) > df["Close"]).astype(int)
+        df.dropna(inplace=True)
 
-        closes = df["Close"].values
-        highs  = df["High"].values
-        lows   = df["Low"].values
-        atrs   = df["atr"].values
-        
-        n = len(df)
-        targets = np.zeros(n)
-        valid_mask = np.zeros(n, dtype=bool)
-        
-        # Look forward to see if TP or SL is hit first
-        # 100 bars on 15m is ~25 hours
-        look_ahead = 100 
-        
-        sl_mult = self.cfg.sl_atr_multiplier  # default 1.5
-        tp_mult = sl_mult * self.cfg.tp_rr_ratio # 1.5 * 2.0 = 3.0
-        
-        for i in range(n - look_ahead):
-            entry = closes[i]
-            sl_price = entry - (atrs[i] * sl_mult)
-            tp_price = entry + (atrs[i] * tp_mult)
-            
-            for j in range(i + 1, i + look_ahead):
-                if lows[j] <= sl_price:
-                    targets[i] = 0
-                    valid_mask[i] = True
-                    break
-                if highs[j] >= tp_price:
-                    targets[i] = 1
-                    valid_mask[i] = True
-                    break
-        
-        df_final = df.iloc[valid_mask].copy()
-        if df_final.empty:
-            return np.array([]), np.array([])
-            
-        available = [c for c in self.FEATURE_COLS if c in df_final.columns]
-        X = df_final[available].values
-        y = targets[valid_mask]
-        
+        available = [c for c in self.FEATURE_COLS if c in df.columns]
+        X = df[available].values
+        y = df["target"].values
         return X, y
 
     def train(self, symbol: str, df: pd.DataFrame) -> float:
@@ -1075,9 +1010,10 @@ class TradeExecutor:
 
     # -- MT5 helpers -----------------------------------------------------------
     def _mt5_symbol(self, symbol: str) -> str:
-        if self.cfg.mt5_symbol_suffix and not symbol.endswith(self.cfg.mt5_symbol_suffix):
-            return symbol + self.cfg.mt5_symbol_suffix
-        return symbol
+        suffix = self.cfg.mt5_symbol_suffix
+        if suffix and symbol.endswith(suffix):
+            return symbol
+        return symbol + suffix
 
     def get_open_positions(self) -> List[dict]:
         """Return list of open positions as dicts."""
@@ -1134,24 +1070,6 @@ class TradeExecutor:
             order_type = mt5.ORDER_TYPE_SELL
             price = tick.bid
 
-        # Dynamically determine filling mode
-        symbol_info = mt5.symbol_info(mt5_sym)
-        if symbol_info is None:
-            log.error(f"MT5: Cannot get symbol info for {mt5_sym}")
-            return False
-
-        # Determine filling mode based on what the symbol/broker supports
-        # SYMBOL_FILLING_FOK = 1, SYMBOL_FILLING_IOC = 2, SYMBOL_FILLING_RETURN = 4
-        filling_mode = mt5.ORDER_FILLING_IOC # Default safest
-        
-        mode_flags = symbol_info.filling_mode
-        if mode_flags & 1: # SYMBOL_FILLING_FOK
-            filling_mode = mt5.ORDER_FILLING_FOK
-        elif mode_flags & 2: # SYMBOL_FILLING_IOC
-            filling_mode = mt5.ORDER_FILLING_IOC
-        elif mode_flags & 4: # SYMBOL_FILLING_RETURN
-            filling_mode = mt5.ORDER_FILLING_RETURN
-
         request = {
             "action":       mt5.TRADE_ACTION_DEAL,
             "symbol":       mt5_sym,
@@ -1163,8 +1081,7 @@ class TradeExecutor:
             "magic":        self.cfg.mt5_magic,
             "comment":      self.cfg.mt5_comment,
             "type_time":    mt5.ORDER_TIME_GTC,
-            "type_filling": filling_mode,
-            "deviation":    self.cfg.mt5_deviation,
+            "type_filling": mt5.ORDER_FILLING_IOC,
         }
 
         # CHECK MARGIN BEFORE SENDING
@@ -1173,9 +1090,8 @@ class TradeExecutor:
             log.error(f"MT5: order_check returned None for {mt5_sym}")
             return False
 
-        # Note: some brokers/versions return 0 for successful order_check, 
-        # while others return TRADE_RETCODE_DONE (10009).
-        if check_result.retcode not in [0, mt5.TRADE_RETCODE_DONE]:
+        # Success codes for check: 0 (Generic Success) or 10009 (TRADE_RETCODE_DONE)
+        if check_result.retcode not in [0, 10009, mt5.TRADE_RETCODE_DONE]:
             log.warning(
                 f"MT5: Insufficient margin/invalid order for {mt5_sym}. "
                 f"Required: {check_result.margin}, Available: {check_result.margin_free}. "
@@ -1345,53 +1261,43 @@ class TradeLogger:
     def __init__(self, cfg: BotConfig):
         self.cfg   = cfg
         self.trades: List[dict] = []
-        self.lock = threading.RLock()
+        self.lock  = threading.RLock()
         self._load()
 
     def _load(self):
-        with self.lock:
-            if os.path.exists(self.cfg.trade_log_file):
-                try:
-                    with open(self.cfg.trade_log_file) as f:
-                        self.trades = json.load(f)
-                    log.info(f"Loaded {len(self.trades)} trades from log")
-                except Exception as e:
-                    log.error(f"Could not load trade log: {e}")
+        if os.path.exists(self.cfg.trade_log_file):
+            try:
+                with open(self.cfg.trade_log_file) as f:
+                    self.trades = json.load(f)
+                log.info(f"Loaded {len(self.trades)} trades from log")
+            except Exception as e:
+                log.error(f"Could not load trade log: {e}")
 
     def save(self):
         with self.lock:
-            for attempt in range(5):
-                try:
-                    tmp = self.cfg.trade_log_file + ".tmp"
-                    with open(tmp, "w") as f:
-                        json.dump(self.trades, f, indent=2)
-                    os.replace(tmp, self.cfg.trade_log_file)
-                    return # Success
-                except (IOError, OSError) as e:
-                    if attempt < 4:
-                        time.sleep(0.1)
-                        continue
-                    log.error(f"Could not save trade log after 5 attempts: {e}")
+            try:
+                tmp = self.cfg.trade_log_file + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(self.trades, f, indent=2)
+                os.replace(tmp, self.cfg.trade_log_file)
+            except Exception as e:
+                log.error(f"Could not save trade log: {e}")
 
     def log_signal(self, signal: TradeSignal):
-        with self.lock:
-            entry = signal.to_dict()
-            entry["type"] = "signal"
-            self.trades.append(entry)
-            self.save()
+        entry = signal.to_dict()
+        entry["type"] = "signal"
+        self.trades.append(entry)
+        self.save()
 
     def log_result(self, result: TradeResult):
-        with self.lock:
-            entry = result.to_dict()
-            entry["type"] = "result"
-            self.trades.append(entry)
-            self.save()
+        entry = result.to_dict()
+        entry["type"] = "result"
+        self.trades.append(entry)
+        self.save()
 
     def get_stats(self) -> dict:
         """Compute performance statistics from logged results."""
-        with self.lock:
-            results = [t for t in self.trades if t.get("type") == "result"]
-        
+        results = [t for t in self.trades if t.get("type") == "result"]
         if not results:
             return {"total_trades": 0}
 
@@ -1452,12 +1358,11 @@ class Dashboard:
     def update(self, latest_signals: List[dict], equity: float = 0.0,
                risk_status: str = "OK"):
         """Write current state to dashboard JSON file."""
-        with self.lock:
-            positions = []
-            try:
-                positions = self.executor.get_open_positions()
-            except Exception:
-                pass
+        positions = []
+        try:
+            positions = self.executor.get_open_positions()
+        except Exception:
+            pass
 
         stats = self.logger.get_stats()
 
@@ -1486,18 +1391,14 @@ class Dashboard:
                     "server":  acc.server,
                 }
 
-        for attempt in range(5):
+        with self.lock:
             try:
                 tmp = self.cfg.dashboard_file + ".tmp"
                 with open(tmp, "w") as f:
                     json.dump(data, f, indent=2)
                 os.replace(tmp, self.cfg.dashboard_file)
-                break
-            except (IOError, OSError) as e:
-                if attempt < 4:
-                    time.sleep(0.1)
-                    continue
-                log.error(f"Dashboard write error after 5 attempts: {e}")
+            except Exception as e:
+                log.error(f"Dashboard write error: {e}")
 
 
 # -----------------------------------------------------------------------------
@@ -1506,238 +1407,177 @@ class Dashboard:
 
 class Backtester:
     """
-    MTF Backtester (15m entry, 1H trend, 4H macro).
-    Aligns timeframes using pandas merge_asof to ensure no lookahead bias.
-    Iterates over 15m bars and evaluates SL/TP sequentially.
+    Walk-forward backtest over historical OHLCV data.
+
+    Uses the same signal logic as the live engine — no look-ahead bias.
+    Simulates SL/TP on each bar using High/Low (conservative approach).
     """
 
     def __init__(self, cfg: BotConfig):
         self.cfg     = cfg
         self.fetcher = DataFetcher(cfg)
 
-    def run(self, symbol: str, initial_capital: float = 10_000.0) -> dict:
-        """Run multi-timeframe backtest on 15m data."""
-        log.info(f"Backtesting {symbol} (MTF) | Capital=${initial_capital:,.0f}")
+    def run(self, symbol: str, period: str = "2y",
+            initial_capital: float = 10_000.0) -> dict:
+        """
+        Run the backtest and return a performance summary.
+        """
+        log.info(f"Backtesting {symbol} | Capital=${initial_capital:,.0f}")
 
-        # 1. Fetch data
-        # Note: Yahoo Finance allows 60 days of 15m data
-        df15 = self.fetcher.fetch_yf(symbol, self.cfg.entry_tf) # 15m
-        df1h = self.fetcher.fetch_yf(symbol, self.cfg.trend_tf) # 1h
-        
-        if df15.empty or df1h.empty:
+        # Fetch daily data for backtest
+        df = self.fetcher.fetch_yf(symbol, "1d")
+        if df.empty or len(df) < 120:
             log.error(f"Backtest: insufficient data for {symbol}")
             return {}
 
-        # 2. Add indicators to each timeframe separately
-        df1h = Indicators.add_all(df1h, self.cfg)
-        
-        # Create 4H macro timeframe from 1H data
-        df4h = df1h.resample("4h").agg({
-            "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"
-        }).dropna()
-        df4h = Indicators.add_all(df4h, self.cfg)
-
-        # 3. Prefix columns to avoid collisions during merge
-        df1h = df1h.add_prefix("h1_")
-        df4h = df4h.add_prefix("h4_")
-
-        # 4. Align timeframes without lookahead bias
-        # We must shift higher timeframe data so it's only available AFTER the candle closes.
-        # YF Datetime is the start of the candle.
-        df1h_available = df1h.copy()
-        df1h_available.index = df1h_available.index + pd.Timedelta(hours=1)
-        
-        df4h_available = df4h.copy()
-        df4h_available.index = df4h_available.index + pd.Timedelta(hours=4)
-
-        # Merge using merge_asof (ensures we pick the latest available H1/H4 candle)
-        # Normalize index types to avoid MergeError (s vs us vs ns)
-        df15.index = pd.to_datetime(df15.index, utc=True).astype('datetime64[ns, UTC]')
-        df1h_available.index = pd.to_datetime(df1h_available.index, utc=True).astype('datetime64[ns, UTC]')
-        df4h_available.index = pd.to_datetime(df4h_available.index, utc=True).astype('datetime64[ns, UTC]')
-
-        df15.sort_index(inplace=True)
-        df1h_available.sort_index(inplace=True)
-        df4h_available.sort_index(inplace=True)
-
-        df = pd.merge_asof(
-            df15, df1h_available,
-            left_index=True, right_index=True,
-            direction="backward"
-        )
-        df = pd.merge_asof(
-            df, df4h_available,
-            left_index=True, right_index=True,
-            direction="backward"
-        )
-
-        # 5. Add 15m indicators to the merged master frame
         df = Indicators.add_all(df, self.cfg)
-        
-        # Remove bars where we don't have enough MTF context yet
-        df.dropna(subset=["h1_Close", "h4_Close"], inplace=True)
-        
-        log.info(f"Backtest: {len(df)} 15m bars aligned for simulation.")
+        log.info(f"Backtest: {len(df)} bars loaded for {symbol}")
 
-        # 6. Simulation Loop
-        capital      = initial_capital
-        trades       = []
-        position     = None
+        capital    = initial_capital
+        trades     = []
+        position   = None   # dict or None
         equity_curve = [capital]
 
-        # Iterate through 15m bars
-        for i in range(1, len(df)):
+        for i in range(60, len(df) - 1):
             bar  = df.iloc[i]
-            prev = df.iloc[i-1]
-            time = df.index[i]
+            prev = df.iloc[i - 1]
 
-            # -- Manage open position (Check SL/TP sequentially) ------------
+            # -- Manage open position ------------------------------------------
             if position is not None:
                 high = bar["High"]
                 low  = bar["Low"]
                 closed = False
-                exit_p = 0.0
-                outcome = ""
 
                 if position["side"] == "BUY":
-                    # Conservative: Check SL first if both hit in same candle
                     if low <= position["sl"]:
                         exit_p = position["sl"]
                         outcome = "LOSS"
-                        closed = True
+                        closed  = True
                     elif high >= position["tp"]:
                         exit_p = position["tp"]
                         outcome = "WIN"
-                        closed = True
-                else: # SELL
+                        closed  = True
+                elif position["side"] == "SELL":
                     if high >= position["sl"]:
                         exit_p = position["sl"]
                         outcome = "LOSS"
-                        closed = True
+                        closed  = True
                     elif low <= position["tp"]:
                         exit_p = position["tp"]
                         outcome = "WIN"
-                        closed = True
+                        closed  = True
 
                 if closed:
                     pnl_pts = (exit_p - position["entry"]) if position["side"] == "BUY" \
                               else (position["entry"] - exit_p)
-                    
-                    # Pip math
-                    pip_size = 0.01 if "JPY" in symbol else 0.0001
-                    pip_val  = 9.0 if "JPY" in symbol else 10.0
+                    pip_size = 0.0001 if "JPY" not in symbol else 0.01
                     pnl_pips = pnl_pts / pip_size
-                    pnl_usd  = pnl_pips * pip_val * position["lots"]
-                    
+                    pnl_usd  = pnl_pips * 10.0 * position["lots"]
                     capital += pnl_usd
                     trades.append({
-                        "symbol":    symbol,
-                        "entry_time": position["time"],
-                        "exit_time":  time.isoformat(),
-                        "side":       position["side"],
-                        "entry":      position["entry"],
-                        "exit":       exit_p,
-                        "lots":       position["lots"],
-                        "pnl_pips":   round(pnl_pips, 1),
-                        "pnl_usd":    round(pnl_usd, 2),
-                        "outcome":    outcome,
+                        "entry_bar":   position["entry_bar"],
+                        "exit_bar":    i,
+                        "side":        position["side"],
+                        "entry":       position["entry"],
+                        "exit":        exit_p,
+                        "sl":          position["sl"],
+                        "tp":          position["tp"],
+                        "lots":        position["lots"],
+                        "pnl_pips":    round(pnl_pips, 1),
+                        "pnl_usd":     round(pnl_usd, 2),
+                        "outcome":     outcome,
                     })
                     position = None
+                    log.debug(f"  [{i}] CLOSED {outcome} pnl={pnl_usd:.2f}")
 
-            # -- Check for new entry signal --------------------------------
+            # -- Check for new signal ------------------------------------------
             if position is None:
-                # Signal engine needs current + previous to check crossovers
-                window = df.iloc[i-1:i+1] 
-                sig_type, score = self._backtest_signal(window)
+                window = df.iloc[max(0, i-80):i+1].copy()
+                signal, score = self._backtest_signal(window)
 
-                if sig_type and score >= self.cfg.min_confluence:
+                if signal is not None and score >= self.cfg.min_confluence:
                     entry = float(bar["Close"])
                     atr   = float(bar["atr"])
-                    
-                    # SL/TP calculation (similar to SignalEngine)
-                    sl_dist = atr * self.cfg.sl_atr_multiplier
-                    tp_dist = sl_dist * self.cfg.tp_rr_ratio
-                    
-                    if sig_type == "BUY":
-                        sl = entry - sl_dist
-                        tp = entry + tp_dist
-                    else:
-                        sl = entry + sl_dist
-                        tp = entry - tp_dist
+                    sl_d  = atr * self.cfg.sl_atr_multiplier
+                    tp_d  = sl_d * self.cfg.tp_rr_ratio
 
-                    # Risk-based lot sizing
-                    pip_size = 0.01 if "JPY" in symbol else 0.0001
-                    pip_val  = 9.0 if "JPY" in symbol else 10.0
-                    risk_usd = capital * self.cfg.risk_per_trade_pct
-                    sl_pips  = sl_dist / pip_size
-                    lots     = risk_usd / (sl_pips * pip_val) if sl_pips > 0 else self.cfg.lot_min
-                    
-                    lots = round(lots / self.cfg.lot_step) * self.cfg.lot_step
-                    lots = max(self.cfg.lot_min, min(lots, self.cfg.lot_max))
+                    if signal == "BUY":
+                        sl = entry - sl_d
+                        tp = entry + tp_d
+                    else:
+                        sl = entry + sl_d
+                        tp = entry - tp_d
+
+                    lots = max(self.cfg.lot_min, min(
+                        round((capital * self.cfg.risk_per_trade_pct) / (sl_d / 0.0001 * 10.0), 2),
+                        self.cfg.lot_max
+                    ))
 
                     position = {
-                        "side":  sig_type,
-                        "entry": entry,
-                        "sl":    sl,
-                        "tp":    tp,
-                        "lots":  lots,
-                        "time":  time.isoformat(),
+                        "side":      signal,
+                        "entry":     entry,
+                        "sl":        sl,
+                        "tp":        tp,
+                        "lots":      lots,
+                        "entry_bar": i,
                     }
 
             equity_curve.append(capital)
+
+        # Close any remaining open position at last bar
+        if position is not None:
+            last_price = float(df["Close"].iloc[-1])
+            pnl_pts = (last_price - position["entry"]) if position["side"] == "BUY" \
+                      else (position["entry"] - last_price)
+            pnl_pips = pnl_pts / 0.0001
+            pnl_usd  = pnl_pips * 10.0 * position["lots"]
+            capital += pnl_usd
+            trades.append({
+                "side": position["side"], "entry": position["entry"],
+                "exit": last_price, "lots": position["lots"],
+                "pnl_pips": round(pnl_pips, 1), "pnl_usd": round(pnl_usd, 2),
+                "outcome": "WIN" if pnl_usd > 0 else "LOSS",
+            })
 
         return self._stats(trades, initial_capital, capital, equity_curve)
 
     def _backtest_signal(self, window: pd.DataFrame) -> Tuple[Optional[str], int]:
         """
-        MTF Signal Logic for Backtesting.
-        Matches live SignalEngine confluence scoring.
+        Simplified signal for backtesting (single timeframe — daily).
+        Returns (signal_direction, confluence_score).
         """
-        if len(window) < 2:
+        if len(window) < 60:
             return None, 0
 
         cur  = window.iloc[-1]
         prev = window.iloc[-2]
 
-        # 1. Macro Bias (4H merged)
-        macro = None
-        if cur["h4_Close"] > cur["h4_ema_macro"]: macro = "UP"
-        elif cur["h4_Close"] < cur["h4_ema_macro"]: macro = "DOWN"
-
-        # 2. Trend Filter (1H merged)
-        trend = None
-        if cur["h1_Close"] > cur["h1_ema_trend"] and cur["h1_ema_fast"] > cur["h1_ema_slow"]:
-            trend = "UP"
-        elif cur["h1_Close"] < cur["h1_ema_trend"] and cur["h1_ema_fast"] < cur["h1_ema_slow"]:
-            trend = "DOWN"
-
-        if trend is None:
-            return None, 0
-            
-        # Macro must agree with trend
-        if macro is not None and macro != trend:
+        # Trend: price vs EMA50
+        if cur["Close"] > cur["ema_trend"] and cur["ema_fast"] > cur["ema_slow"]:
+            trend = "BUY"
+        elif cur["Close"] < cur["ema_trend"] and cur["ema_fast"] < cur["ema_slow"]:
+            trend = "SELL"
+        else:
             return None, 0
 
-        # 3. Confluence Scoring (15m entry)
         score = 0
         rsi   = cur["rsi"]
         mh    = cur["macd_hist"]
         sk    = cur["stoch_k"]
-        sd    = cur["stoch_d"]
         bb    = cur["bb_position"]
         adx   = cur["adx"]
 
-        if trend == "UP":
-            if 45 <= rsi <= 70: score += 1
-            if mh > 0 or (prev["macd_hist"] < 0 < mh): score += 1
-            if sk < 80 and sk > sd: score += 1
-            if bb < 0.6: score += 1
+        if trend == "BUY":
+            if 45 <= rsi <= 70:      score += 1
+            if mh > 0:               score += 1
+            if sk < 80:              score += 1
+            if bb < 0.65:            score += 1
             if adx > 20 and cur["plus_di"] > cur["minus_di"]: score += 1
-        else: # DOWN
-            if 30 <= rsi <= 55: score += 1
-            if mh < 0 or (prev["macd_hist"] > 0 > mh): score += 1
-            if sk > 20 and sk < sd: score += 1
-            if bb > 0.4: score += 1
+        else:
+            if 30 <= rsi <= 55:      score += 1
+            if mh < 0:               score += 1
+            if sk > 20:              score += 1
+            if bb > 0.35:            score += 1
             if adx > 20 and cur["minus_di"] > cur["plus_di"]: score += 1
 
         return (trend if score >= self.cfg.min_confluence else None), score
@@ -1932,11 +1772,10 @@ class HaldaneTradingBot:
                 self.cfg.live_trading = False
 
         if self.cfg.use_ml and HAS_SKL:
-            log.info(f"Training ML models on {self.cfg.entry_tf} data...")
+            log.info("Training ML models...")
             for symbol in self.cfg.symbols:
                 try:
-                    # ML must be trained on the same timeframe used for entries
-                    df = self.fetcher.fetch_yf(symbol, self.cfg.entry_tf)
+                    df = self.fetcher.fetch_yf(symbol, "1d")
                     if not df.empty:
                         df = Indicators.add_all(df, self.cfg)
                         self.ml.train(symbol, df)
@@ -1962,35 +1801,35 @@ class HaldaneTradingBot:
                 return
 
             # Get tickets we already have in our log to avoid duplicates
-            with self.logger.lock:
-                existing_tickets = {t.get("ticket") for t in self.logger.trades if t.get("type") == "result"}
-                
-                new_trades_count = 0
-                for d in deals:
-                    # We only care about deals that close a position (Entry OUT = 1 or IN/OUT = 2)
-                    # and have a non-zero profit (to exclude deposits/withdrawals)
-                    if d.entry in [1, 2] and d.ticket not in existing_tickets and d.profit != 0:
-                        # Create a TradeResult-like dict
-                        res = {
-                            "type": "result",
-                            "ticket": d.ticket,
-                            "symbol": d.symbol,
-                            "signal": "BUY" if d.type == 1 else "SELL", 
-                            "entry_price": d.price, 
-                            "exit_price": d.price,
-                            "pnl_usd": d.profit,
-                            "outcome": "WIN" if d.profit > 0 else "LOSS",
-                            "exit_time": datetime.fromtimestamp(d.time).isoformat(),
-                            "magic": d.magic,
-                            "comment": d.comment
-                        }
-                        self.logger.trades.append(res)
-                        existing_tickets.add(d.ticket)
-                        new_trades_count += 1
-                
-                if new_trades_count > 0:
-                    self.logger.save()
-                    log.info(f"Sync: Added {new_trades_count} closed trades from MT5 history")
+            existing_tickets = {t.get("ticket") for t in self.logger.trades if t.get("type") == "result"}
+            
+            new_trades_count = 0
+            for d in deals:
+                # We only care about deals that close a position (Entry OUT = 1 or IN/OUT = 2)
+                # and have a non-zero profit (to exclude deposits/withdrawals)
+                if d.entry in [1, 2] and d.ticket not in existing_tickets and d.profit != 0:
+                    # Create a TradeResult-like dict
+                    res = {
+                        "type": "result",
+                        "ticket": d.ticket,
+                        "symbol": d.symbol,
+                        "signal": "BUY" if d.type == 1 else "SELL", # Deal type 0=Buy, 1=Sell. If entry is out, Deal BUY means closed SELL? Actually Deal type 1 (SELL) for closing a BUY.
+                        "entry_price": d.price, # This is the close price for the deal?
+                        "exit_price": d.price,
+                        "pnl_usd": d.profit,
+                        "outcome": "WIN" if d.profit > 0 else "LOSS",
+                        "exit_time": datetime.fromtimestamp(d.time).isoformat(),
+                        "magic": d.magic,
+                        "comment": d.comment
+                    }
+                    # Note: Simplified TradeResult for historical sync
+                    self.logger.trades.append(res)
+                    existing_tickets.add(d.ticket)
+                    new_trades_count += 1
+            
+            if new_trades_count > 0:
+                self.logger.save()
+                log.info(f"Sync: Added {new_trades_count} closed trades from MT5 history")
 
         except Exception as e:
             log.error(f"Error syncing history: {e}")
@@ -2047,151 +1886,100 @@ class HaldaneTradingBot:
                 return sig
         return None
 
-    # -- Main loops -------------------------------------------------------------
-    async def run(self):
-        """Asynchronous live / paper trading loop."""
+    # -- Main loop -------------------------------------------------------------
+    def run(self):
+        """Live / paper trading loop."""
         self.running = True
         self.setup()
 
         log.info("=" * 55)
-        log.info("  HALDANE BOT v3 — ASYNC TRADING SYSTEM STARTED")
+        log.info("  HALDANE BOT v3 — TRADING LOOP STARTED")
         log.info("=" * 55)
 
-        # Create concurrent tasks
-        tasks = [
-            asyncio.create_task(self._main_strategy_loop()),
-            asyncio.create_task(self._trailing_stop_loop()),
-            asyncio.create_task(self._dashboard_loop()),
-            asyncio.create_task(self._history_sync_loop()),
-        ]
-
-        try:
-            await asyncio.gather(*tasks)
-        except asyncio.CancelledError:
-            log.info("Tasks cancelled. Shutting down...")
-        except Exception as e:
-            log.error(f"Critical error in main task aggregator: {e}")
-            log.debug(traceback.format_exc())
-        finally:
-            self.shutdown()
-
-    async def _main_strategy_loop(self):
-        """Loop for processing symbols and generating signals."""
         loop_count = 0
+
         while self.running:
             try:
                 loop_count += 1
-                log.info(f"\n--- Strategy Cycle #{loop_count} | {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC ---")
+                log.info(f"\n--- Loop #{loop_count} | {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC ---")
 
+                # Refresh MT5 connection
                 if self.cfg.live_trading:
-                    await asyncio.to_thread(self.mt5_mgr.ensure_connected)
+                    self.mt5_mgr.ensure_connected()
 
-                equity = await asyncio.to_thread(self.mt5_mgr.get_equity)
+                equity     = self.mt5_mgr.get_equity()
                 self.risk_mgr.update_equity(equity)
 
+                # Check daily loss limit
                 if not self.risk_mgr.check_daily_loss(equity):
-                    log.warning("⛔ Daily loss limit active. Skipping strategy cycle.")
-                    await asyncio.sleep(self.cfg.interval_seconds)
+                    log.warning("⛔ Daily loss limit active. Skipping all trades.")
+                    self._sleep_and_dashboard(equity, "PAUSED - daily loss limit")
                     continue
 
-                positions = await asyncio.to_thread(self.executor.get_open_positions)
-                open_count = len([p for p in positions if p.get("magic") == self.cfg.mt5_magic])
-                log.info(f"Open positions: {open_count}/{self.cfg.max_positions} | Equity: ${equity:.2f}")
+                # Count open positions
+                positions  = self.executor.get_open_positions()
+                open_count = len([p for p in positions
+                                  if p.get("magic") == self.cfg.mt5_magic])
+                log.info(f"Open positions: {open_count}/{self.cfg.max_positions} "
+                         f"| Equity: ${equity:.2f}")
 
-                # Process symbols concurrently
-                symbol_tasks = [
-                    self._process_symbol_async(symbol, equity)
-                    for symbol in self.cfg.symbols
-                ]
-                await asyncio.gather(*symbol_tasks)
+                # Update trailing stop losses
+                if self.cfg.live_trading:
+                    self.executor.update_trailing_sl()
+                    self.sync_historical_trades() # Sync closed trades
 
-                log.info(f"Strategy cycle complete. Waiting {self.cfg.interval_seconds}s...")
-                await asyncio.sleep(self.cfg.interval_seconds)
-
-            except Exception as e:
-                log.error(f"Error in strategy loop: {e}")
-                log.debug(traceback.format_exc())
-                await asyncio.sleep(30)
-
-    async def _process_symbol_async(self, symbol: str, equity: float):
-        """Asynchronously process a single symbol."""
-        try:
-            use_mt5 = self.cfg.live_trading and HAS_MT5
-            
-            # Offload blocking data fetching and signal generation to a thread
-            sig = await asyncio.to_thread(self.engine.generate, symbol, equity, use_mt5)
-            
-            if sig:
-                # Re-check open count before execution
-                positions = await asyncio.to_thread(self.executor.get_open_positions)
-                open_count = len([p for p in positions if p.get("magic") == self.cfg.mt5_magic])
-                
+                # Process each symbol
                 # Dynamic max positions: if a signal has very high confidence, we temporarily allow more
                 current_max = self.cfg.max_positions
-                if sig.confidence >= 0.4:
-                    log.info(f"🔥 High confidence detected for {symbol} ({sig.confidence}). Boosting max trades to {self.cfg.max_positions + 1}")
-                    current_max = self.cfg.max_positions + 1
-                
-                if open_count < current_max:
-                    await asyncio.to_thread(self.process_trade, sig, equity, open_count, current_max)
-                else:
-                    log.debug(f"{symbol}: Trade limit reached, signal ignored.")
-        except Exception as e:
-            log.error(f"Error processing {symbol} (async): {e}")
 
-    async def _trailing_stop_loop(self):
-        """Concurrent task for updating trailing stops."""
-        if not self.cfg.live_trading:
-            return
+                for symbol in self.cfg.symbols:
+                    try:
+                        # Check for signal first to see confidence
+                        use_mt5 = self.cfg.live_trading and HAS_MT5
+                        sig = self.engine.generate(symbol, equity, use_mt5)
+                        
+                        if sig:
+                            # If very high confidence, boost max positions
+                            if sig.confidence >= 0.4:
+                                log.info(f"🔥 High confidence detected ({sig.confidence}). Boosting max trades to {self.cfg.max_positions + 1}")
+                                current_max = self.cfg.max_positions + 1
+                            
+                            # Now process with the (possibly boosted) limit
+                            self.process_trade(sig, equity, open_count, current_max)
+                    except Exception as e:
+                        log.error(f"Error processing {symbol}: {e}")
+                        log.debug(traceback.format_exc())
 
-        while self.running:
-            try:
-                await asyncio.to_thread(self.executor.update_trailing_sl)
-                # Run more frequently than the strategy loop for tighter trailing
-                await asyncio.sleep(20) 
+                self._sleep_and_dashboard(equity, "OK")
+
+            except KeyboardInterrupt:
+                log.info("\nKeyboard interrupt — shutting down gracefully")
+                self.running = False
+                break
             except Exception as e:
-                log.error(f"Error in trailing stop loop: {e}")
-                await asyncio.sleep(10)
+                log.error(f"Unhandled error in main loop: {e}")
+                log.debug(traceback.format_exc())
+                time.sleep(30)
 
-    async def _dashboard_loop(self):
-        """Concurrent task for updating the dashboard."""
-        while self.running:
-            try:
-                equity = await asyncio.to_thread(self.mt5_mgr.get_equity)
-                risk_status = "PAUSED - Daily Loss" if self.risk_mgr.trading_paused else "OK"
-                
-                await asyncio.to_thread(
-                    self.dashboard.update,
-                    self.recent_signals[-10:],
-                    equity=equity,
-                    risk_status=risk_status
-                )
-                
-                stats = self.logger.get_stats()
-                if stats.get("total_trades", 0) > 0:
-                    log.info(
-                        f"Status | Trades={stats['total_trades']} "
-                        f"Win={stats.get('win_rate', 0)}% "
-                        f"PnL=${stats.get('total_pnl_usd', 0):.2f}"
-                    )
-                
-                await asyncio.sleep(max(30, self.cfg.interval_seconds // 2))
-            except Exception as e:
-                log.error(f"Error in dashboard loop: {e}")
-                await asyncio.sleep(10)
+        self.shutdown()
 
-    async def _history_sync_loop(self):
-        """Concurrent task for syncing trade history."""
-        if not self.cfg.live_trading:
-            return
-
-        while self.running:
-            try:
-                await asyncio.to_thread(self.sync_historical_trades)
-                await asyncio.sleep(300) # Sync every 5 minutes
-            except Exception as e:
-                log.error(f"Error in history sync loop: {e}")
-                await asyncio.sleep(60)
+    def _sleep_and_dashboard(self, equity: float, risk_status: str):
+        """Update dashboard and sleep until next candle."""
+        self.dashboard.update(
+            self.recent_signals[-10:],
+            equity=equity,
+            risk_status=risk_status,
+        )
+        stats = self.logger.get_stats()
+        if stats.get("total_trades", 0) > 0:
+            log.info(
+                f"Performance | Trades={stats['total_trades']} "
+                f"Win={stats.get('win_rate', 0)}% "
+                f"PnL=${stats.get('total_pnl_usd', 0):.2f} "
+                f"PF={stats.get('profit_factor', 0):.2f}"
+            )
+        log.info(f"Sleeping {self.cfg.interval_seconds}s until next cycle…")
+        time.sleep(self.cfg.interval_seconds)
 
     def shutdown(self):
         """Clean shutdown."""
@@ -2268,13 +2056,7 @@ def main():
         live_trading=True,               # ← Set True to trade on MT5
         lot_min=0.01,
         lot_max=0.10,                    # Keep small on a $10 account
-        spread_max_pips=1.5,
-        symbol_spread_limits={
-            "EURUSD": 1.0,
-            "GBPUSD": 1.2,
-            "USDJPY": 1.2,
-            "GBPJPY": 2.5,
-        },
+        spread_max_pips=3.0,
 
         # Sessions
         trade_sessions=[(7, 16), (13, 22)],
@@ -2355,10 +2137,7 @@ def main():
         print("\n  Set cfg.live_trading=True in main() to go live.\n")
 
         bot = HaldaneTradingBot(cfg)
-        try:
-            asyncio.run(bot.run())
-        except KeyboardInterrupt:
-            log.info("Interrupted by user, shutting down...")
+        bot.run()
 
 
 if __name__ == "__main__":
