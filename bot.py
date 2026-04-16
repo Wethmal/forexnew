@@ -523,6 +523,11 @@ class DataFetcher:
         suffix = self.cfg.mt5_symbol_suffix
         mt5_sym = symbol if (suffix and symbol.endswith(suffix)) else symbol + suffix
 
+        # Ensure symbol is selected in Market Watch
+        if not mt5.symbol_select(mt5_sym, True):
+            log.error(f"MT5: Cannot select symbol {mt5_sym}")
+            return pd.DataFrame()
+
         rates = mt5.copy_rates_from_pos(mt5_sym, tf, 0, count)
         if rates is None or len(rates) == 0:
             log.error(f"MT5: No data for {mt5_sym}. Error: {mt5.last_error()}")
@@ -552,6 +557,11 @@ class DataFetcher:
             return 1.0   # Assume 1 pip for paper trading
         suffix = self.cfg.mt5_symbol_suffix
         mt5_sym = symbol if (suffix and symbol.endswith(suffix)) else symbol + suffix
+        
+        # Ensure symbol is selected
+        if not mt5.symbol_select(mt5_sym, True):
+            return 99.0
+
         tick = mt5.symbol_info_tick(mt5_sym)
         if tick is None:
             return 99.0
@@ -559,7 +569,9 @@ class DataFetcher:
         if symbol_info is None:
             return 99.0
         spread_points = tick.ask - tick.bid
-        pip_size = 0.0001 if symbol_info.digits == 5 else 0.01
+        point = symbol_info.point
+        # Standard: 1 pip = 10 points for 3/5 digit brokers, 1 point for 2/4 digit brokers
+        pip_size = 10 * point if symbol_info.digits in [3, 5] else point
         return spread_points / pip_size
 
 
@@ -692,8 +704,8 @@ class SignalEngine:
                 reasons.append(f"ADX={adx:.1f} ✓ (+DI>{minus_di:.1f})")
 
         elif trend == "DOWN":
-            # 1. RSI between 30 and 55
-            if self.cfg.rsi_sell_min <= rsi <= self.cfg.rsi_sell_max:
+            # 1. RSI between 30 and 50 (Stronger bearish momentum filter)
+            if self.cfg.rsi_sell_min <= rsi <= 50.0:
                 score += 1
                 reasons.append(f"RSI={rsi:.1f} ✓ (sell zone)")
 
@@ -830,14 +842,23 @@ class SignalEngine:
             f"{reason_str}"
         )
 
+        # Get rounding digits
+        digits = 5
+        if HAS_MT5 and use_mt5:
+            suffix = self.cfg.mt5_symbol_suffix
+            mt5_sym = symbol if (suffix and symbol.endswith(suffix)) else symbol + suffix
+            info = mt5.symbol_info(mt5_sym)
+            if info:
+                digits = info.digits
+
         signal = TradeSignal(
             symbol=symbol,
             signal=signal_type,
-            entry_price=round(float(entry), 5),
-            stop_loss=round(float(stop_loss), 5),
-            take_profit=round(float(take_profit), 5),
-            sl_distance=round(float(sl_dist), 5),
-            tp_distance=round(float(tp_dist), 5),
+            entry_price=round(float(entry), digits),
+            stop_loss=round(float(stop_loss), digits),
+            take_profit=round(float(take_profit), digits),
+            sl_distance=round(float(sl_dist), digits),
+            tp_distance=round(float(tp_dist), digits),
             rr_ratio=round(actual_rr, 2),
             lots=lots,
             confidence=round(confidence, 3),
@@ -866,27 +887,30 @@ class SignalEngine:
         if sl_distance <= 0:
             return 0.0
 
-        # Pips
-        pip_size = 0.0001
-        if "JPY" in symbol:
-            pip_size = 0.01
+        # Pip and Tick Calculation
+        if HAS_MT5 and self.cfg.live_trading:
+            # Determine MT5 symbol with suffix
+            suffix = self.cfg.mt5_symbol_suffix
+            mt5_sym = symbol if (suffix and symbol.endswith(suffix)) else symbol + suffix
+            info = mt5.symbol_info(mt5_sym)
+            if info and info.trade_tick_value > 0 and info.trade_tick_size > 0:
+                # Precision position sizing using tick values
+                sl_ticks = sl_distance / info.trade_tick_size
+                lots = risk_amount / (sl_ticks * info.trade_tick_value)
+                
+                # Snap to broker lot step and limits
+                lots = round(lots / cfg.lot_step) * cfg.lot_step
+                lots = max(cfg.lot_min, min(lots, cfg.lot_max))
+                return round(lots, 2)
+
+        # Fallback to approximation if MT5 info is unavailable
+        pip_size = 0.01 if "JPY" in symbol else 0.0001
+        pip_val  = 9.0 if "JPY" in symbol else 10.0
         sl_pips = sl_distance / pip_size
-
-        # $10 per pip per standard lot for major pairs
-        pip_value = 10.0
-        if "JPY" in symbol:
-            pip_value = 9.0   # approximate
-
-        lots = risk_amount / (sl_pips * pip_value)
-
-        # Snap to broker lot step
+        
+        lots = risk_amount / (sl_pips * pip_val)
         lots = round(lots / cfg.lot_step) * cfg.lot_step
         lots = max(cfg.lot_min, min(lots, cfg.lot_max))
-
-        # Cap at max_position_pct of equity
-        max_lots_by_equity = (equity * cfg.max_position_pct) / (sl_pips * pip_value)
-        lots = min(lots, max_lots_by_equity)
-
         return round(lots, 2)
 
 
@@ -1046,6 +1070,19 @@ class TradeExecutor:
                 return True
         return False
 
+    def _get_filling_mode(self, symbol: str) -> int:
+        """Dynamically select the correct filling mode for the broker."""
+        info = mt5.symbol_info(symbol)
+        if not info:
+            return mt5.ORDER_FILLING_IOC
+        
+        filling = info.filling_mode
+        if filling & mt5.SYMBOL_FILLING_FOK:
+            return mt5.ORDER_FILLING_FOK
+        if filling & mt5.SYMBOL_FILLING_IOC:
+            return mt5.ORDER_FILLING_IOC
+        return mt5.ORDER_FILLING_RETURN
+
     def execute_mt5(self, signal: TradeSignal) -> bool:
         """Send a market order to MT5."""
         if not HAS_MT5:
@@ -1081,34 +1118,42 @@ class TradeExecutor:
             "magic":        self.cfg.mt5_magic,
             "comment":      self.cfg.mt5_comment,
             "type_time":    mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": self._get_filling_mode(mt5_sym),
         }
 
         # CHECK MARGIN BEFORE SENDING
-        check_result = mt5.order_check(request)
-        if check_result is None:
-            log.error(f"MT5: order_check returned None for {mt5_sym}")
+        try:
+            check_result = mt5.order_check(request)
+            if check_result is None:
+                log.error(f"MT5: order_check returned None for {mt5_sym}")
+                return False
+
+            # Success codes for check: 0 (Generic Success) or 10009 (TRADE_RETCODE_DONE)
+            if check_result.retcode not in [0, 10009, mt5.TRADE_RETCODE_DONE]:
+                log.warning(
+                    f"MT5: Insufficient margin/invalid order for {mt5_sym}. "
+                    f"Required: {check_result.margin}, Available: {check_result.margin_free}. "
+                    f"Retcode: {check_result.retcode}"
+                )
+                return False
+        except Exception as e:
+            log.error(f"MT5: order_check exception for {mt5_sym}: {e}")
             return False
 
-        # Success codes for check: 0 (Generic Success) or 10009 (TRADE_RETCODE_DONE)
-        if check_result.retcode not in [0, 10009, mt5.TRADE_RETCODE_DONE]:
-            log.warning(
-                f"MT5: Insufficient margin/invalid order for {mt5_sym}. "
-                f"Required: {check_result.margin}, Available: {check_result.margin_free}. "
-                f"Retcode: {check_result.retcode}"
-            )
-            return False
+        try:
+            result = mt5.order_send(request)
+            if result is None:
+                log.error(f"MT5: order_send returned None for {mt5_sym}")
+                return False
 
-        result = mt5.order_send(request)
-        if result is None:
-            log.error(f"MT5: order_send returned None for {mt5_sym}")
-            return False
-
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            log.error(
-                f"MT5: order failed retcode={result.retcode} "
-                f"({mt5.last_error()}) for {mt5_sym}"
-            )
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                log.error(
+                    f"MT5: order failed retcode={result.retcode} "
+                    f"({mt5.last_error()}) for {mt5_sym}"
+                )
+                return False
+        except Exception as e:
+            log.error(f"MT5: order_send exception for {mt5_sym}: {e}")
             return False
 
         log.info(
@@ -1805,6 +1850,10 @@ class HaldaneTradingBot:
             
             new_trades_count = 0
             for d in deals:
+                # FILTER BY MAGIC NUMBER and check if it's a closing deal
+                if d.magic != self.cfg.mt5_magic:
+                    continue
+
                 # We only care about deals that close a position (Entry OUT = 1 or IN/OUT = 2)
                 # and have a non-zero profit (to exclude deposits/withdrawals)
                 if d.entry in [1, 2] and d.ticket not in existing_tickets and d.profit != 0:
@@ -1933,6 +1982,8 @@ class HaldaneTradingBot:
                 current_max = self.cfg.max_positions
 
                 for symbol in self.cfg.symbols:
+                    # Reset max trades to default at the start of every symbol check
+                    current_max = self.cfg.max_positions
                     try:
                         # Check for signal first to see confidence
                         use_mt5 = self.cfg.live_trading and HAS_MT5

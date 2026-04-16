@@ -1,6 +1,6 @@
 {
-  "last_update": "2026-04-16 20:20:28",
-  "equity": 174.35,
+  "last_update": "2026-04-16 20:31:28",
+  "equity": 174.48,
   "risk_status": "OK",
   "open_positions": [
     {
@@ -9,22 +9,10 @@
       "type": "BUY",
       "volume": 0.01,
       "price_open": 159.18099999999998,
-      "price_cur": 159.161,
-      "sl": 159.109,
+      "price_cur": 159.273,
+      "sl": 159.177,
       "tp": 159.706,
-      "profit": -0.13,
-      "magic": 20250415
-    },
-    {
-      "ticket": 4283799679,
-      "symbol": "AUDUSDm",
-      "type": "BUY",
-      "volume": 0.02,
-      "price_open": 0.7169400000000001,
-      "price_cur": 0.71685,
-      "sl": 0.71656,
-      "tp": 0.71855,
-      "profit": -0.18,
+      "profit": 0.58,
       "magic": 20250415
     }
   ],
@@ -136,32 +124,19 @@
     }
   ],
   "performance": {
-    "total_trades": 23,
+    "total_trades": 24,
     "wins": 9,
-    "losses": 14,
-    "win_rate": 39.1,
-    "total_pnl_usd": 60.29,
+    "losses": 15,
+    "win_rate": 37.5,
+    "total_pnl_usd": 59.53,
     "avg_win_usd": 13.24,
-    "avg_loss_usd": -4.2,
-    "profit_factor": 2.02,
-    "expectancy_usd": 2.62,
+    "avg_loss_usd": -3.97,
+    "profit_factor": 2.0,
+    "expectancy_usd": 2.48,
     "max_drawdown_usd": 33.48,
     "best_trade_usd": 32.53,
     "worst_trade_usd": -21.62,
     "closed_trades": [
-      {
-        "type": "result",
-        "ticket": 3667218975,
-        "symbol": "AUDUSDm",
-        "signal": "BUY",
-        "entry_price": 0.7132,
-        "exit_price": 0.7132,
-        "pnl_usd": -1.06,
-        "outcome": "LOSS",
-        "exit_time": "2026-04-15T15:58:25",
-        "magic": 99991,
-        "comment": "[sl 0.71320]"
-      },
       {
         "type": "result",
         "ticket": 3667218978,
@@ -408,23 +383,23 @@
         "exit_time": "2026-04-16T19:52:32",
         "magic": 20250415,
         "comment": "[sl 0.71659]"
+      },
+      {
+        "type": "result",
+        "ticket": 3675019962,
+        "symbol": "AUDUSDm",
+        "signal": "BUY",
+        "entry_price": 0.71656,
+        "exit_price": 0.71656,
+        "pnl_usd": -0.76,
+        "outcome": "LOSS",
+        "exit_time": "2026-04-16T20:23:04",
+        "magic": 20250415,
+        "comment": "[sl 0.71656]"
       }
     ]
   },
   "closed_trades": [
-    {
-      "type": "result",
-      "ticket": 3667218975,
-      "symbol": "AUDUSDm",
-      "signal": "BUY",
-      "entry_price": 0.7132,
-      "exit_price": 0.7132,
-      "pnl_usd": -1.06,
-      "outcome": "LOSS",
-      "exit_time": "2026-04-15T15:58:25",
-      "magic": 99991,
-      "comment": "[sl 0.71320]"
-    },
     {
       "type": "result",
       "ticket": 3667218978,
@@ -671,15 +646,28 @@
       "exit_time": "2026-04-16T19:52:32",
       "magic": 20250415,
       "comment": "[sl 0.71659]"
+    },
+    {
+      "type": "result",
+      "ticket": 3675019962,
+      "symbol": "AUDUSDm",
+      "signal": "BUY",
+      "entry_price": 0.71656,
+      "exit_price": 0.71656,
+      "pnl_usd": -0.76,
+      "outcome": "LOSS",
+      "exit_time": "2026-04-16T20:23:04",
+      "magic": 20250415,
+      "comment": "[sl 0.71656]"
     }
   ],
   "total_signals": 169,
   "account": {
     "login": 413646889,
-    "balance": 174.66,
-    "equity": 174.35,
-    "margin": 1.22,
-    "profit": -0.31,
+    "balance": 173.9,
+    "equity": 174.48,
+    "margin": 0.5,
+    "profit": 0.58,
     "server": "Exness-MT5Trial6"
   }
 }

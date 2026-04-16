@@ -319,5 +319,18 @@
     "timestamp": "2026-04-16T20:11:20.497442",
     "ml_probability": 0.5,
     "type": "signal"
+  },
+  {
+    "type": "result",
+    "ticket": 3675019962,
+    "symbol": "AUDUSDm",
+    "signal": "BUY",
+    "entry_price": 0.71656,
+    "exit_price": 0.71656,
+    "pnl_usd": -0.76,
+    "outcome": "LOSS",
+    "exit_time": "2026-04-16T20:23:04",
+    "magic": 20250415,
+    "comment": "[sl 0.71656]"
   }
 ]
