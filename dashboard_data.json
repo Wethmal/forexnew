@@ -1,6 +1,6 @@
 {
-  "last_update": "2026-04-16 11:17:05",
-  "equity": 156.42,
+  "last_update": "2026-04-16 11:54:06",
+  "equity": 159.22,
   "risk_status": "OK",
   "open_positions": [
     {
@@ -9,10 +9,10 @@
       "type": "SELL",
       "volume": 0.1,
       "price_open": 1.3574000000000002,
-      "price_cur": 1.3571,
+      "price_cur": 1.35745,
       "sl": 1.36028,
       "tp": 1.35308,
-      "profit": 3.0,
+      "profit": -0.5,
       "magic": 234000
     },
     {
@@ -21,10 +21,10 @@
       "type": "SELL",
       "volume": 0.1,
       "price_open": 1.1813200000000001,
-      "price_cur": 1.18061,
+      "price_cur": 1.17998,
       "sl": 1.18312,
       "tp": 1.1786,
-      "profit": 7.1,
+      "profit": 13.4,
       "magic": 234000
     }
   ],
@@ -142,9 +142,9 @@
   "account": {
     "login": 413646889,
     "balance": 146.32,
-    "equity": 156.42,
+    "equity": 159.22,
     "margin": 12.7,
-    "profit": 10.1,
+    "profit": 12.9,
     "server": "Exness-MT5Trial6"
   }
 }

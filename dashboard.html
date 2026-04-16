@@ -211,19 +211,40 @@
                     tableBody.appendChild(row);
                 });
 
-                // Recent History (mapping from performance or history list if added)
-                // Note: The bot script doesn't send 'history' in dashboard_data but has trade_log.json
-                // For now, we clear history or display info from performance
+                // Recent History
                 const historyList = document.getElementById('history-list');
                 historyList.innerHTML = '';
-                if (data.performance && data.performance.total_trades > 0) {
-                     const div = document.createElement('div');
-                     div.className = 'p-3 bg-white/5 rounded-xl border border-white/5';
-                     div.innerHTML = `
-                         <p class="text-sm font-bold text-slate-300">Total Profit Factor: ${data.performance.profit_factor || 'N/A'}</p>
-                         <p class="text-xs text-slate-400">Total PnL: $${data.performance.total_pnl_usd || 0}</p>
-                     `;
-                     historyList.appendChild(div);
+                
+                const closedTrades = data.closed_trades || [];
+                if (closedTrades.length === 0) {
+                    historyList.innerHTML = '<p class="text-slate-500 text-sm text-center py-4">No recent closed trades</p>';
+                } else {
+                    // Show last 10 closed trades (reversed to show latest first)
+                    [...closedTrades].reverse().slice(0, 10).forEach(trade => {
+                        const div = document.createElement('div');
+                        const isWin = trade.pnl_usd >= 0;
+                        const date = new Date(trade.exit_time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                        
+                        div.className = 'p-3 bg-white/5 rounded-xl border border-white/5 flex justify-between items-center transition-all hover:bg-white/10';
+                        div.innerHTML = `
+                            <div class="flex items-center">
+                                <div class="w-8 h-8 rounded-full ${isWin ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'} flex items-center justify-center mr-3">
+                                    <i class="fas ${isWin ? 'fa-arrow-up' : 'fa-arrow-down'} text-xs"></i>
+                                </div>
+                                <div>
+                                    <p class="text-sm font-bold text-slate-200">${trade.symbol}</p>
+                                    <p class="text-[10px] text-slate-500 uppercase">${date} • ${trade.signal || 'CLOSED'}</p>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-sm font-mono font-bold ${isWin ? 'text-emerald-400' : 'text-red-400'}">
+                                    ${isWin ? '+' : ''}$${Math.abs(trade.pnl_usd).toFixed(2)}
+                                </p>
+                                <p class="text-[10px] text-slate-500 font-mono">ID: ${String(trade.ticket).slice(-4)}</p>
+                            </div>
+                        `;
+                        historyList.appendChild(div);
+                    });
                 }
 
                 // Update Status

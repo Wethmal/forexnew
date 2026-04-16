@@ -1328,6 +1328,7 @@ class TradeLogger:
             "max_drawdown_usd": round(max_dd, 2),
             "best_trade_usd": round(max(pnls), 2) if pnls else 0,
             "worst_trade_usd": round(min(pnls), 2) if pnls else 0,
+            "closed_trades":  results[-20:]  # Include last 20 trades
         }
 
 
@@ -1362,6 +1363,7 @@ class Dashboard:
             "open_positions": positions,
             "latest_signals": latest_signals[-5:],
             "performance":    stats,
+            "closed_trades":  stats.get("closed_trades", []),
             "total_signals":  len([t for t in self.logger.trades
                                    if t.get("type") == "signal"]),
         }
@@ -1768,6 +1770,58 @@ class HaldaneTradingBot:
                         self.ml.train(symbol, df)
                 except Exception as e:
                     log.error(f"ML training failed for {symbol}: {e}")
+        
+        # Initial history sync
+        if self.cfg.live_trading:
+            self.sync_historical_trades()
+
+    def sync_historical_trades(self):
+        """Fetch recently closed trades from MT5 history and update logger."""
+        if not HAS_MT5 or not self.cfg.live_trading:
+            return
+
+        try:
+            # Sync last 7 days of history
+            from_date = datetime.now() - timedelta(days=7)
+            to_date = datetime.now()
+            
+            deals = mt5.history_deals_get(from_date, to_date)
+            if deals is None:
+                return
+
+            # Get tickets we already have in our log to avoid duplicates
+            existing_tickets = {t.get("ticket") for t in self.logger.trades if t.get("type") == "result"}
+            
+            new_trades_count = 0
+            for d in deals:
+                # We only care about deals that close a position (Entry OUT = 1 or IN/OUT = 2)
+                # and have a non-zero profit (to exclude deposits/withdrawals)
+                if d.entry in [1, 2] and d.ticket not in existing_tickets and d.profit != 0:
+                    # Create a TradeResult-like dict
+                    res = {
+                        "type": "result",
+                        "ticket": d.ticket,
+                        "symbol": d.symbol,
+                        "signal": "BUY" if d.type == 1 else "SELL", # Deal type 0=Buy, 1=Sell. If entry is out, Deal BUY means closed SELL? Actually Deal type 1 (SELL) for closing a BUY.
+                        "entry_price": d.price, # This is the close price for the deal?
+                        "exit_price": d.price,
+                        "pnl_usd": d.profit,
+                        "outcome": "WIN" if d.profit > 0 else "LOSS",
+                        "exit_time": datetime.fromtimestamp(d.time).isoformat(),
+                        "magic": d.magic,
+                        "comment": d.comment
+                    }
+                    # Note: Simplified TradeResult for historical sync
+                    self.logger.trades.append(res)
+                    existing_tickets.add(d.ticket)
+                    new_trades_count += 1
+            
+            if new_trades_count > 0:
+                self.logger.save()
+                log.info(f"Sync: Added {new_trades_count} closed trades from MT5 history")
+
+        except Exception as e:
+            log.error(f"Error syncing history: {e}")
 
     # -- Single symbol processing ----------------------------------------------
     # -- Signal processing and execution -------------------------------------
@@ -1861,6 +1915,7 @@ class HaldaneTradingBot:
                 # Update trailing stop losses
                 if self.cfg.live_trading:
                     self.executor.update_trailing_sl()
+                    self.sync_historical_trades() # Sync closed trades
 
                 # Process each symbol
                 # Dynamic max positions: if a signal has very high confidence, we temporarily allow more
