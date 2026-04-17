@@ -32,6 +32,13 @@ import time
 import logging
 import warnings
 import traceback
+import requests
+import xml.etree.ElementTree as ET
+try:
+    import pytz
+except ImportError:
+    pytz = None
+
 from copy import deepcopy
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field, asdict
@@ -159,6 +166,11 @@ class GoldenConfig:
     lot_max:    float = 0.50
     lot_step:   float = 0.01
     spread_max_pips: float = 20.0
+
+    # News Filter
+    news_filter_enabled: bool = True
+    finnhub_api_key: str = "d7b1gppr01qtpbha68rgd7b1gppr01qtpbha68s0"
+    news_cache_file: str = "economic_news.json"
 
     # ML filter (optional)
     use_ml:  bool  = True
@@ -348,6 +360,8 @@ class Indicators:
 
     @staticmethod
     def volume_ratio(df: pd.DataFrame, period=20) -> pd.Series:
+        if "Volume" not in df.columns or (df["Volume"] == 0).all():
+            return pd.Series(1.0, index=df.index)
         vol_sma = df["Volume"].rolling(period).mean()
         return df["Volume"] / vol_sma.replace(0, np.nan)
 
@@ -1123,6 +1137,215 @@ class DataFetcher:
 
 
 # ---------------------------------------------------------------------------
+# ECONOMIC NEWS FILTER
+# ---------------------------------------------------------------------------
+
+class NewsFilter:
+    """
+    Fetches economic news from Finnhub (primary) or Forex Factory (fallback)
+    and implements local caching to prevent rate-limiting.
+    """
+    def __init__(self, cfg: GoldenConfig):
+        self.cfg = cfg
+        self.events = []
+        self.last_fetch = None
+        self.cache_file = cfg.news_cache_file
+        self.tz_utc = pytz.utc if pytz else None
+        
+        self._load_cache()
+        
+        # Initial fetch if cache is old or empty
+        if not self.events or self._cache_is_stale():
+            self.fetch_news()
+
+    def _load_cache(self):
+        """Load events from local JSON cache."""
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, 'r') as f:
+                    data = json.load(f)
+                    self.events = data.get("events", [])
+                    lf = data.get("last_fetch")
+                    if lf:
+                        self.last_fetch = datetime.fromisoformat(lf)
+                    log.info(f"NewsFilter: Loaded {len(self.events)} events from cache.")
+            except Exception as e:
+                log.error(f"NewsFilter: Cache load error: {e}")
+
+    def _save_cache(self):
+        """Save current events and fetch timestamp to disk."""
+        try:
+            with open(self.cache_file, 'w') as f:
+                json.dump({
+                    "last_fetch": self.last_fetch.isoformat() if self.last_fetch else None,
+                    "events": self.events
+                }, f, indent=4)
+        except Exception as e:
+            log.error(f"NewsFilter: Cache save error: {e}")
+
+    def _cache_is_stale(self) -> bool:
+        """Check if cache is more than 6 hours old."""
+        if not self.last_fetch:
+            return True
+        return (datetime.utcnow() - self.last_fetch).total_seconds() > 21600
+
+    def fetch_news(self):
+        """Try fetching from Finnhub primarily, fallback to FF JSON if needed."""
+        if not self.cfg.news_filter_enabled:
+            return
+
+        if self.cfg.finnhub_api_key:
+            success = self._fetch_finnhub()
+            if success: return
+        
+        self._fetch_forexfactory_json()
+
+    def _fetch_finnhub(self) -> bool:
+        """Fetch news from Finnhub API."""
+        try:
+            log.info("NewsFilter: Fetching from Finnhub API...")
+            url = f"https://finnhub.io/api/v1/calendar/economic?token={self.cfg.finnhub_api_key}"
+            headers = {"User-Agent": "Mozilla/5.0"}
+            resp = requests.get(url, headers=headers, timeout=15)
+            
+            if resp.status_code == 429:
+                log.warning("NewsFilter: Finnhub rate limit hit. Using cache.")
+                return False
+
+            if resp.status_code != 200:
+                log.debug(f"NewsFilter: Finnhub failed (HTTP {resp.status_code})")
+                return False
+            
+            data = resp.json()
+            # Finnhub returns a list of events directly under 'economicCalendar' or as root list
+            events_list = data.get('economicCalendar', []) if isinstance(data, dict) else data
+            
+            new_events = []
+            for ev in events_list:
+                # Finnhub time: 2022-01-01 13:30:00 (UTC)
+                new_events.append({
+                    "title": ev.get('event', 'Unknown'),
+                    "currency": ev.get('country', '').upper(),
+                    "time": ev.get('time'),
+                    "impact": ev.get('impact', 'low').lower()
+                })
+            
+            self.events = new_events
+            self.last_fetch = datetime.utcnow()
+            self._save_cache()
+            log.info(f"NewsFilter: Loaded {len(self.events)} events via Finnhub.")
+            return True
+        except Exception as e:
+            log.error(f"NewsFilter: Finnhub Error: {e}")
+            return False
+
+    def _fetch_forexfactory_json(self):
+        """Fetch from FF JSON feed with improved browser-like headers."""
+        try:
+            log.info("NewsFilter: Fetching from Forex Factory JSON...")
+            url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json",
+                "Referer": "https://www.forexfactory.com/"
+            }
+            resp = requests.get(url, headers=headers, timeout=15)
+            
+            if resp.status_code == 429:
+                log.warning("NewsFilter: Forex Factory rate limit (429). Penalty system will be inactive until next successful fetch.")
+                return
+
+            if resp.status_code != 200:
+                log.debug(f"NewsFilter: FF JSON failed (HTTP {resp.status_code})")
+                return
+
+            data = resp.json()
+            new_events = []
+            for ev in data:
+                # FF JSON time: 2026-04-12T18:30:00-04:00
+                new_events.append({
+                    "title": ev.get('title'),
+                    "currency": ev.get('country', '').upper(),
+                    "time": ev.get('date'),
+                    "impact": ev.get('impact', 'low').lower()
+                })
+            
+            self.events = new_events
+            self.last_fetch = datetime.utcnow()
+            self._save_cache()
+            log.info(f"NewsFilter: Loaded {len(self.events)} events via Forex Factory.")
+        except Exception as e:
+            log.error(f"NewsFilter: FF JSON Error: {e}")
+
+    def _parse_time(self, time_str: str) -> datetime:
+        """Robustly parse ISO8601 or Finnhub-style date strings."""
+        try:
+            # Try ISO 8601 with offset
+            return datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+        except ValueError:
+            # Try Finnhub format: 2022-01-01 13:30:00
+            dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+            return dt.replace(tzinfo=pytz.utc) if pytz else dt
+
+    def get_penalty(self, symbol: str) -> float:
+        """
+        Calculates penalty to be subtracted from the strategy score.
+        """
+        if not self.cfg.news_filter_enabled or not self.events:
+            return 0.0
+
+        # Refresh news if it's stale (handles rate limits by only fetching every 6h)
+        if self._cache_is_stale():
+            self.fetch_news()
+
+        # Extract currencies
+        clean_sym = symbol.upper()
+        if hasattr(self.cfg, 'mt5_symbol_suffix') and self.cfg.mt5_symbol_suffix:
+            clean_sym = clean_sym.replace(self.cfg.mt5_symbol_suffix.upper(), "")
+            
+        target_currencies = []
+        majors = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"]
+        for m in majors:
+            if m in clean_sym:
+                target_currencies.append(m)
+        if not target_currencies and len(clean_sym) >= 6:
+            target_currencies = [clean_sym[:3], clean_sym[3:6]]
+
+        now_utc = datetime.utcnow()
+        max_penalty = 0.0
+        active_news = []
+
+        for ev in self.events:
+            if ev['currency'] in target_currencies:
+                try:
+                    ev_time_aware = self._parse_time(ev['time'])
+                    # Normalizing to naive UTC for comparison with now_utc
+                    if ev_time_aware.tzinfo:
+                        ev_time_naive = ev_time_aware.astimezone(pytz.utc).replace(tzinfo=None)
+                    else:
+                        ev_time_naive = ev_time_aware
+
+                    start_window = ev_time_naive - timedelta(minutes=30)
+                    end_window   = ev_time_naive + timedelta(minutes=60)
+                    
+                    if start_window <= now_utc <= end_window:
+                        impact = ev['impact']
+                        penalty = 4.0 if impact == "high" else (2.0 if impact == "medium" else 0.0)
+                        
+                        if penalty > max_penalty:
+                            max_penalty = penalty
+                        if penalty > 0:
+                            active_news.append(f"{ev['currency']} {impact.upper()}")
+                except Exception:
+                    continue
+
+        if max_penalty > 0:
+            log.warning(f"⚠️ NEWS ALERT: {symbol} -{max_penalty:.1f} penalty | Active: {', '.join(set(active_news))}")
+            
+        return max_penalty
+
+
+# ---------------------------------------------------------------------------
 # COMBINED SIGNAL ENGINE
 # ---------------------------------------------------------------------------
 
@@ -1137,9 +1360,10 @@ class GoldenSignalEngine:
     5. Use the best-scoring direction (BUY or SELL)
     """
 
-    def __init__(self, cfg: GoldenConfig, fetcher: DataFetcher):
+    def __init__(self, cfg: GoldenConfig, fetcher: DataFetcher, news_filter: NewsFilter):
         self.cfg     = cfg
         self.fetcher = fetcher
+        self.news_filter = news_filter
 
     def _session_ok(self) -> bool:
         hour = datetime.utcnow().hour
@@ -1252,12 +1476,15 @@ class GoldenSignalEngine:
         score = self._score_direction(df15, trend)
         combined = score.combined(self.cfg)
 
-        if combined < self.cfg.min_score:
+        # Economic News Penalty
+        news_penalty = self.news_filter.get_penalty(symbol)
+        final_score = combined - news_penalty
+
+        if final_score < self.cfg.min_score:
             log.info(
-                f"{symbol}: combined score {combined:.2f} < "
+                f"{symbol}: score {final_score:.2f} (Tech={combined:.2f}, News=-{news_penalty:.1f}) < "
                 f"{self.cfg.min_score} threshold | "
-                f"S1={score.s1_score:.1f} S2={score.s2_score:.1f} "
-                f"S3={score.s3_score:.1f}"
+                f"S1={score.s1_score:.1f} S2={score.s2_score:.1f} S3={score.s3_score:.1f}"
             )
             return None
 
@@ -1287,8 +1514,7 @@ class GoldenSignalEngine:
         )
         reason_str = (
             f"Trend={trend} Macro={macro} | "
-            f"Score={combined:.2f}/10 [S1={score.s1_score:.1f} S2={score.s2_score:.1f} "
-            f"S3={score.s3_score:.1f}] | "
+            f"FinalScore={final_score:.2f} (Tech={combined:.2f}, News=-{news_penalty:.1f}) | "
             f"DominantStrategy={dom_strat.value}\n" +
             "\n".join(f"    {r}" for r in all_reasons)
         )
@@ -1303,7 +1529,7 @@ class GoldenSignalEngine:
             tp_distance = round(tp_dist, 5),
             rr_ratio    = round(rr, 2),
             lots        = lots,
-            confidence  = round(combined / 10.0, 3),
+            confidence  = round(final_score / 10.0, 3),
             score       = score,
             strategy    = dom_strat.value,
             rsi         = round(rsi, 2),
@@ -1316,7 +1542,7 @@ class GoldenSignalEngine:
         log.info(
             f"SIGNAL > {sig.signal.value} {symbol} | "
             f"Entry={sig.entry_price} SL={sig.stop_loss} TP={sig.take_profit} | "
-            f"RR={sig.rr_ratio} Score={combined:.1f}/10"
+            f"RR={sig.rr_ratio} FinalScore={final_score:.1f}/10"
         )
         return sig
 
@@ -1876,7 +2102,8 @@ class GoldenTradingBot:
     def __init__(self, cfg: Optional[GoldenConfig] = None):
         self.cfg      = cfg or GoldenConfig()
         self.fetcher  = DataFetcher(self.cfg)
-        self.engine   = GoldenSignalEngine(self.cfg, self.fetcher)
+        self.news_filter = NewsFilter(self.cfg)
+        self.engine   = GoldenSignalEngine(self.cfg, self.fetcher, self.news_filter)
         self.ml       = MLFilter(self.cfg)
         self.executor = TradeExecutor(self.cfg, self.fetcher)
         self.risk     = RiskManager(self.cfg)
