@@ -1,44 +1,19 @@
 {
-  "last_update": "2026-04-16 21:46:14",
-  "equity": 174.22,
+  "last_update": "2026-04-17 08:52:04",
+  "equity": 171.41,
   "risk_status": "OK",
-  "open_positions": [
-    {
-      "ticket": 4284221084,
-      "symbol": "USDJPYm",
-      "type": "BUY",
-      "volume": 0.01,
-      "price_open": 159.208,
-      "price_cur": 159.033,
-      "sl": 158.965,
-      "tp": 159.664,
-      "profit": -1.1,
-      "magic": 20250415
-    },
-    {
-      "ticket": 4284255522,
-      "symbol": "AUDUSDm",
-      "type": "BUY",
-      "volume": 0.02,
-      "price_open": 0.7165600000000001,
-      "price_cur": 0.71729,
-      "sl": 0.71628,
-      "tp": 0.71842,
-      "profit": 1.46,
-      "magic": 20250415
-    }
-  ],
+  "open_positions": [],
   "latest_signals": [],
   "performance": {
     "total_trades": 0
   },
-  "total_signals": 8,
+  "total_signals": 9,
   "account": {
     "login": 413646889,
-    "balance": 173.87,
-    "equity": 174.23,
-    "margin": 1.22,
-    "profit": 0.36,
+    "balance": 171.41,
+    "equity": 171.41,
+    "margin": 0.0,
+    "profit": 0.0,
     "server": "Exness-MT5Trial6"
   }
 }

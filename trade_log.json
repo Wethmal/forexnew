@@ -174,5 +174,27 @@
     "timestamp": "2026-04-16T21:00:07.679863",
     "ml_probability": 0.5,
     "type": "signal"
+  },
+  {
+    "symbol": "USDJPY",
+    "signal": "BUY",
+    "entry_price": 159.19,
+    "stop_loss": 159.0833,
+    "take_profit": 159.4034,
+    "sl_distance": 0.1067,
+    "tp_distance": 0.2134,
+    "rr_ratio": 2.0,
+    "lots": 0.03,
+    "confidence": 0.6,
+    "confluence_score": 3,
+    "trend": "UP",
+    "rsi": 52.08,
+    "macd_hist": -0.01228,
+    "atr": 0.05157,
+    "spread_pips": 1.0,
+    "reason": "Trend=UP Macro=UP | Score=3/5 | RSI=52.1 (OK - buy zone) | Stoch K=41.0 (OK - not overbought, K>D) | BB pos=0.54 (OK - room to upper band)",
+    "timestamp": "2026-04-17T01:53:21.598392",
+    "ml_probability": 0.5,
+    "type": "signal"
   }
 ]

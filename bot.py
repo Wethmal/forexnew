@@ -1,25 +1,25 @@
 """
-╔==============================================================================╗
-║           HALDANE TRADING BOT v3.0 — FULL PRODUCTION SYSTEM                ║
-║                                                                              ║
-║  Strategy  : Multi-timeframe Trend + Momentum + Volatility Breakout         ║
-║  Models    : EMA Trend Filter + RSI + MACD + Bollinger + Stochastic + ATR   ║
-║  Execution : MetaTrader5 (live) / Yahoo Finance (paper)                     ║
-║  Risk Mgmt : Fixed fractional sizing, ATR-based SL/TP, daily loss limits    ║
-║  Dashboard : JSON export for live monitoring                                 ║
-║  Backtest  : Walk-forward simulation with full trade log                    ║
-║                                                                              ║
-║  Author    : Haldane System                                                  ║
-║  Version   : 3.0.0                                                           ║
-╚==============================================================================╝
++==============================================================================+
+|           HALDANE TRADING BOT v3.0 ? FULL PRODUCTION SYSTEM                |
+|                                                                              |
+|  Strategy  : Multi-timeframe Trend + Momentum + Volatility Breakout         |
+|  Models    : EMA Trend Filter + RSI + MACD + Bollinger + Stochastic + ATR   |
+|  Execution : MetaTrader5 (live) / Yahoo Finance (paper)                     |
+|  Risk Mgmt : Fixed fractional sizing, ATR-based SL/TP, daily loss limits    |
+|  Dashboard : JSON export for live monitoring                                 |
+|  Backtest  : Walk-forward simulation with full trade log                    |
+|                                                                              |
+|  Author    : Haldane System                                                  |
+|  Version   : 3.0.0                                                           |
++==============================================================================+
 
 SENIOR TRADER NOTES:
   - This bot uses CONFLUENCE: at least 3/5 indicators must agree before entry
   - Never trades against the 1H trend (EMA50 filter is non-negotiable)
-  - Every trade has a pre-set SL and TP before entry — no exceptions
+  - Every trade has a pre-set SL and TP before entry ? no exceptions
   - Daily drawdown limit: if you lose 3% of equity in a day, bot stops trading
   - Position sizing is automatic based on your account equity and SL distance
-  - Min 2:1 reward-to-risk on every trade — if you can't get 2R, skip the trade
+  - Min 2:1 reward-to-risk on every trade ? if you can't get 2R, skip the trade
 
 HOW TO RUN:
   Paper mode  : python haldane_bot_full.py
@@ -38,7 +38,6 @@ ENV VARS FOR LIVE MT5:
 # -----------------------------------------------------------------------------
 
 import os
-import threading
 import sys
 import json
 import time
@@ -132,7 +131,7 @@ class BotConfig:
     symbols: List[str] = field(default_factory=lambda: [
         "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"
     ])
-    # MT5 symbol suffix if your broker uses one (e.g. "m" → "EURUSDm")
+    # MT5 symbol suffix if your broker uses one (e.g. "m" ? "EURUSDm")
     mt5_symbol_suffix: str = ""
 
     # -- Timeframes ------------------------------------------------------------
@@ -174,13 +173,13 @@ class BotConfig:
 
     # -- Risk management -------------------------------------------------------
     risk_per_trade_pct: float  = 0.01   # 1% of equity per trade
-    sl_atr_multiplier: float   = 1.5    # SL = 1.5 × ATR from entry
-    tp_rr_ratio: float         = 2.0    # TP = 2× the SL distance
+    sl_atr_multiplier: float   = 1.5    # SL = 1.5 ? ATR from entry
+    tp_rr_ratio: float         = 2.0    # TP = 2? the SL distance
     min_rr_ratio: float        = 1.8    # Skip trade if we can't get at least 1.8R
     max_positions: int         = 3      # Max simultaneous open trades
     max_daily_loss_pct: float  = 0.03   # Stop trading if daily loss > 3%
     max_position_pct: float    = 0.10   # No single position > 10% of equity
-    trailing_sl_atr: float     = 1.5    # Trail SL by 1× ATR when in profit
+    trailing_sl_atr: float     = 1.0    # Trail SL by 1? ATR when in profit
 
     # -- Execution ------------------------------------------------------------
     live_trading: bool       = False
@@ -339,7 +338,7 @@ class Indicators:
 
     @staticmethod
     def adx(df: pd.DataFrame, period: int = 14) -> Tuple[pd.Series, pd.Series, pd.Series]:
-        """Average Directional Index — measures trend strength."""
+        """Average Directional Index ? measures trend strength."""
         high = df["High"]
         low  = df["Low"]
         close= df["Close"]
@@ -520,13 +519,7 @@ class DataFetcher:
             "1d":  mt5.TIMEFRAME_D1,  "1wk": mt5.TIMEFRAME_W1,
         }
         tf = TF_MAP.get(timeframe, mt5.TIMEFRAME_H1)
-        suffix = self.cfg.mt5_symbol_suffix
-        mt5_sym = symbol if (suffix and symbol.endswith(suffix)) else symbol + suffix
-
-        # Ensure symbol is selected in Market Watch
-        if not mt5.symbol_select(mt5_sym, True):
-            log.error(f"MT5: Cannot select symbol {mt5_sym}")
-            return pd.DataFrame()
+        mt5_sym = symbol + self.cfg.mt5_symbol_suffix
 
         rates = mt5.copy_rates_from_pos(mt5_sym, tf, 0, count)
         if rates is None or len(rates) == 0:
@@ -555,13 +548,7 @@ class DataFetcher:
         """Get current spread in pips from MT5 tick data."""
         if not HAS_MT5:
             return 1.0   # Assume 1 pip for paper trading
-        suffix = self.cfg.mt5_symbol_suffix
-        mt5_sym = symbol if (suffix and symbol.endswith(suffix)) else symbol + suffix
-        
-        # Ensure symbol is selected
-        if not mt5.symbol_select(mt5_sym, True):
-            return 99.0
-
+        mt5_sym = symbol + self.cfg.mt5_symbol_suffix
         tick = mt5.symbol_info_tick(mt5_sym)
         if tick is None:
             return 99.0
@@ -569,9 +556,7 @@ class DataFetcher:
         if symbol_info is None:
             return 99.0
         spread_points = tick.ask - tick.bid
-        point = symbol_info.point
-        # Standard: 1 pip = 10 points for 3/5 digit brokers, 1 point for 2/4 digit brokers
-        pip_size = 10 * point if symbol_info.digits in [3, 5] else point
+        pip_size = 0.0001 if symbol_info.digits == 5 else 0.01
         return spread_points / pip_size
 
 
@@ -584,9 +569,9 @@ class SignalEngine:
     Multi-timeframe signal generation with confluence scoring.
 
     Flow:
-      1. Fetch 4H data → macro bias (overall market direction)
-      2. Fetch 1H data → trend filter (EMA50, EMA200)
-      3. Fetch 15m data → entry trigger (RSI, MACD, Stoch, BB)
+      1. Fetch 4H data ? macro bias (overall market direction)
+      2. Fetch 1H data ? trend filter (EMA50, EMA200)
+      3. Fetch 15m data ? entry trigger (RSI, MACD, Stoch, BB)
       4. Count how many indicators confirm the trend direction
       5. Only signal if confluence >= min_confluence
     """
@@ -642,7 +627,7 @@ class SignalEngine:
         elif last["Close"] < last["ema_trend"] and last["ema_fast"] < last["ema_slow"]:
             trend = "DOWN"
         else:
-            trend = None  # No clear trend — skip
+            trend = None  # No clear trend ? skip
 
         return trend, last
 
@@ -681,53 +666,53 @@ class SignalEngine:
             # 1. RSI between 45 and 70 (momentum but not overbought)
             if self.cfg.rsi_buy_min <= rsi <= self.cfg.rsi_buy_max:
                 score += 1
-                reasons.append(f"RSI={rsi:.1f} (OK - buy zone)")
+                reasons.append(f"RSI={rsi:.1f} ? (buy zone)")
 
             # 2. MACD histogram positive or crossing up
             if macd_hist > 0 or (prev["macd_hist"] < 0 < macd_hist):
                 score += 1
-                reasons.append(f"MACD hist={macd_hist:.5f} (OK - bullish)")
+                reasons.append(f"MACD hist={macd_hist:.5f} ? (bullish)")
 
             # 3. Stochastic not overbought, ideally rising
             if stoch_k < 80 and stoch_k > stoch_d:
                 score += 1
-                reasons.append(f"Stoch K={stoch_k:.1f} (OK - not overbought, K>D)")
+                reasons.append(f"Stoch K={stoch_k:.1f} ? (not overbought, K>D)")
 
             # 4. Price in lower half of Bollinger Band (room to run)
             if bb_pos < 0.6:
                 score += 1
-                reasons.append(f"BB pos={bb_pos:.2f} (OK - room to upper band)")
+                reasons.append(f"BB pos={bb_pos:.2f} ? (room to upper band)")
 
             # 5. ADX > 20 (trending) with +DI > -DI
             if adx > 20 and plus_di > minus_di:
                 score += 1
-                reasons.append(f"ADX={adx:.1f} (OK - +DI>{minus_di:.1f})")
+                reasons.append(f"ADX={adx:.1f} ? (+DI>{minus_di:.1f})")
 
         elif trend == "DOWN":
             # 1. RSI between 30 and 55
             if self.cfg.rsi_sell_min <= rsi <= self.cfg.rsi_sell_max:
                 score += 1
-                reasons.append(f"RSI={rsi:.1f} (OK - sell zone)")
+                reasons.append(f"RSI={rsi:.1f} ? (sell zone)")
 
             # 2. MACD histogram negative or crossing down
             if macd_hist < 0 or (prev["macd_hist"] > 0 > macd_hist):
                 score += 1
-                reasons.append(f"MACD hist={macd_hist:.5f} (OK - bearish)")
+                reasons.append(f"MACD hist={macd_hist:.5f} ? (bearish)")
 
             # 3. Stochastic not oversold, ideally falling
             if stoch_k > 20 and stoch_k < stoch_d:
                 score += 1
-                reasons.append(f"Stoch K={stoch_k:.1f} (OK - not oversold, K<D)")
+                reasons.append(f"Stoch K={stoch_k:.1f} ? (not oversold, K<D)")
 
             # 4. Price in upper half of BB (room to fall)
             if bb_pos > 0.4:
                 score += 1
-                reasons.append(f"BB pos={bb_pos:.2f} (OK - room to lower band)")
+                reasons.append(f"BB pos={bb_pos:.2f} ? (room to lower band)")
 
             # 5. ADX > 20 with -DI > +DI
             if adx > 20 and minus_di > plus_di:
                 score += 1
-                reasons.append(f"ADX={adx:.1f} (OK - -DI>{plus_di:.1f})")
+                reasons.append(f"ADX={adx:.1f} ? (-DI>{plus_di:.1f})")
 
         return score, reasons
 
@@ -780,17 +765,17 @@ class SignalEngine:
         macro = self.get_macro_bias(symbol, use_mt5)
         if macro is None:
             log.debug(f"{symbol}: macro bias unclear")
-            # Don't hard-block — macro is a soft filter
+            # Don't hard-block ? macro is a soft filter
 
         # -- Trend filter (1H) ------------------------------------------------
         trend, trend_row = self.get_trend(symbol, use_mt5)
         if trend is None:
-            log.info(f"{symbol}: no clear 1H trend — skipping")
+            log.info(f"{symbol}: no clear 1H trend ? skipping")
             return None
 
         # Macro must agree with trend (or be unknown)
         if macro is not None and macro != trend:
-            log.info(f"{symbol}: macro ({macro}) disagrees with 1H trend ({trend}) — skipping")
+            log.info(f"{symbol}: macro ({macro}) disagrees with 1H trend ({trend}) ? skipping")
             return None
 
         # -- Entry signals (15m) ----------------------------------------------
@@ -804,7 +789,7 @@ class SignalEngine:
 
         if confluence_score < self.cfg.min_confluence:
             log.info(f"{symbol}: confluence too low ({confluence_score}/"
-                     f"{self.cfg.min_confluence}) — skipping")
+                     f"{self.cfg.min_confluence}) ? skipping")
             return None
 
         cur    = df15.iloc[-1]
@@ -824,7 +809,7 @@ class SignalEngine:
         tp_dist = abs(take_profit - entry)
         actual_rr = tp_dist / sl_dist if sl_dist > 0 else 0
         if actual_rr < self.cfg.min_rr_ratio:
-            log.info(f"{symbol}: RR={actual_rr:.2f} below minimum {self.cfg.min_rr_ratio} — skipping")
+            log.info(f"{symbol}: RR={actual_rr:.2f} below minimum {self.cfg.min_rr_ratio} ? skipping")
             return None
 
         # -- Position sizing ---------------------------------------------------
@@ -863,7 +848,7 @@ class SignalEngine:
         )
 
         log.info(
-            f"SIGNAL >> {signal.signal.value} {symbol} | "
+            f"SIGNAL > {signal.signal.value} {symbol} | "
             f"Entry={signal.entry_price} SL={signal.stop_loss} TP={signal.take_profit} | "
             f"RR={signal.rr_ratio} Lots={signal.lots} | Score={confluence_score}/5"
         )
@@ -871,66 +856,35 @@ class SignalEngine:
 
     def _calc_lots(self, equity: float, sl_distance: float,
                    symbol: str) -> float:
-        """Precision position sizing using MT5 native tick data."""
+        """Fixed fractional position sizing."""
         cfg = self.cfg
         risk_amount = equity * cfg.risk_per_trade_pct
 
         if sl_distance <= 0:
             return 0.0
 
-        # Try to get MT5 precision values
-        mt5_sym = symbol
-        if hasattr(self, "fetcher") and hasattr(self.fetcher, "cfg"):
-            suffix = self.cfg.mt5_symbol_suffix
-            mt5_sym = symbol if (suffix and symbol.endswith(suffix)) else symbol + suffix
+        # Pips
+        pip_size = 0.0001
+        if "JPY" in symbol:
+            pip_size = 0.01
+        sl_pips = sl_distance / pip_size
 
-        # Default fallback values for paper/backtest
-        tick_value = 1.0  # value of 1 tick for 1 standard lot
-        tick_size  = 0.0001
-        
-        if HAS_MT5 and mt5.terminal_info():
-            info = mt5.symbol_info(mt5_sym)
-            if info:
-                tick_value = info.trade_tick_value
-                tick_size  = info.trade_tick_size
-            else:
-                # Fallback based on name for JPY if MT5 fails
-                if "JPY" in symbol:
-                    tick_size = 0.01
-                    tick_value = 9.0  # Approx for JPY
-        else:
-            # Fallback for paper trading
-            if "JPY" in symbol:
-                tick_size = 0.01
-                tick_value = 9.0
-            else:
-                tick_size = 0.0001
-                tick_value = 10.0
+        # $10 per pip per standard lot for major pairs
+        pip_value = 10.0
+        if "JPY" in symbol:
+            pip_value = 9.0   # approximate
 
-        # sl_distance is in price units (e.g. 0.0050)
-        # Number of ticks in SL = sl_distance / tick_size
-        # Cost per lot = (sl_distance / tick_size) * tick_value
-        try:
-            cost_per_lot = (sl_distance / tick_size) * tick_value
-            if cost_per_lot <= 0:
-                return 0.0
-            
-            lots = risk_amount / cost_per_lot
-        except ZeroDivisionError:
-            return 0.0
+        lots = risk_amount / (sl_pips * pip_value)
 
         # Snap to broker lot step
         lots = round(lots / cfg.lot_step) * cfg.lot_step
         lots = max(cfg.lot_min, min(lots, cfg.lot_max))
 
         # Cap at max_position_pct of equity
-        try:
-            max_lots_by_equity = (equity * cfg.max_position_pct) / cost_per_lot
-            lots = min(lots, max_lots_by_equity)
-        except ZeroDivisionError:
-            pass
+        max_lots_by_equity = (equity * cfg.max_position_pct) / (sl_pips * pip_value)
+        lots = min(lots, max_lots_by_equity)
 
-        return round(float(lots), 2)
+        return round(lots, 2)
 
 
 # -----------------------------------------------------------------------------
@@ -988,7 +942,7 @@ class MLFilter:
             log.warning(f"ML: too little data to train for {symbol}")
             return 0.0
 
-        # Time-series split — no data leakage
+        # Time-series split ? no data leakage
         split = int(len(X) * 0.8)
         X_train, X_test = X[:split], X[split:]
         y_train, y_test = y[:split], y[split:]
@@ -1053,10 +1007,7 @@ class TradeExecutor:
 
     # -- MT5 helpers -----------------------------------------------------------
     def _mt5_symbol(self, symbol: str) -> str:
-        suffix = self.cfg.mt5_symbol_suffix
-        if suffix and symbol.endswith(suffix):
-            return symbol
-        return symbol + suffix
+        return symbol + self.cfg.mt5_symbol_suffix
 
     def get_open_positions(self) -> List[dict]:
         """Return list of open positions as dicts."""
@@ -1088,21 +1039,6 @@ class TradeExecutor:
             if p["symbol"] == sym and p["magic"] == self.cfg.mt5_magic:
                 return True
         return False
-
-    def _get_filling_mode(self, symbol: str) -> int:
-        """Determine the correct filling mode for the symbol."""
-        if not HAS_MT5:
-            return 0
-        info = mt5.symbol_info(symbol)
-        if not info or info.filling_mode == 0:
-            return mt5.ORDER_FILLING_IOC
-        
-        filling = info.filling_mode
-        if filling & 1: # SYMBOL_FILLING_FOK
-            return mt5.ORDER_FILLING_FOK
-        elif filling & 2: # SYMBOL_FILLING_IOC
-            return mt5.ORDER_FILLING_IOC
-        return mt5.ORDER_FILLING_RETURN
 
     def execute_mt5(self, signal: TradeSignal) -> bool:
         """Send a market order to MT5."""
@@ -1139,23 +1075,8 @@ class TradeExecutor:
             "magic":        self.cfg.mt5_magic,
             "comment":      self.cfg.mt5_comment,
             "type_time":    mt5.ORDER_TIME_GTC,
-            "type_filling": self._get_filling_mode(mt5_sym),
+            "type_filling": mt5.ORDER_FILLING_IOC,
         }
-
-        # CHECK MARGIN BEFORE SENDING
-        check_result = mt5.order_check(request)
-        if check_result is None:
-            log.error(f"MT5: order_check returned None for {mt5_sym}")
-            return False
-
-        # Acceptance codes for order_check: 0 (Validated) or 10009 (Done/Correct)
-        if check_result.retcode not in [0, 10009, mt5.TRADE_RETCODE_DONE]:
-            log.warning(
-                f"MT5: Order validation failed for {mt5_sym}. "
-                f"Retcode: {check_result.retcode}, Comment: {getattr(check_result, 'comment', 'N/A')}. "
-                f"Balance: {mt5.account_info().balance if mt5.account_info() else 'N/A'}"
-            )
-            return False
 
         result = mt5.order_send(request)
         if result is None:
@@ -1170,7 +1091,7 @@ class TradeExecutor:
             return False
 
         log.info(
-            f"MT5 ORDER PLACED >> {signal.signal.value} {mt5_sym} "
+            f"MT5 ORDER PLACED > {signal.signal.value} {mt5_sym} "
             f"{signal.lots} lots @ {price:.5f} "
             f"SL={signal.stop_loss:.5f} TP={signal.take_profit:.5f}"
         )
@@ -1179,7 +1100,7 @@ class TradeExecutor:
     def execute_paper(self, signal: TradeSignal) -> bool:
         """Log a paper trade."""
         log.info(
-            f"[PAPER] >> {signal.signal.value} {signal.symbol} "
+            f"[PAPER] > {signal.signal.value} {signal.symbol} "
             f"{signal.lots} lots @ {signal.entry_price:.5f} | "
             f"SL={signal.stop_loss:.5f} TP={signal.take_profit:.5f} | "
             f"RR={signal.rr_ratio} Confidence={signal.confidence:.0%}"
@@ -1285,7 +1206,7 @@ class RiskManager:
                     f"Daily loss limit reached: {daily_pnl_pct:.1%} "
                     f"(limit: -{self.cfg.max_daily_loss_pct:.1%})"
                 )
-                log.warning(f"⛔ TRADING PAUSED: {self.pause_reason}")
+                log.warning(f"? TRADING PAUSED: {self.pause_reason}")
             return False
 
         if self.trading_paused:
@@ -1318,29 +1239,26 @@ class TradeLogger:
 
     def __init__(self, cfg: BotConfig):
         self.cfg   = cfg
-        self.lock  = threading.RLock()
+        self.trades: List[dict] = []
         self._load()
 
     def _load(self):
-        with self.lock:
-            self.trades = []
-            if os.path.exists(self.cfg.trade_log_file):
-                try:
-                    with open(self.cfg.trade_log_file, "r") as f:
-                        self.trades = json.load(f)
-                    log.info(f"Loaded {len(self.trades)} trades from log")
-                except Exception as e:
-                    log.error(f"Could not load trade log: {e}")
+        if os.path.exists(self.cfg.trade_log_file):
+            try:
+                with open(self.cfg.trade_log_file) as f:
+                    self.trades = json.load(f)
+                log.info(f"Loaded {len(self.trades)} trades from log")
+            except Exception as e:
+                log.error(f"Could not load trade log: {e}")
 
     def save(self):
-        with self.lock:
-            try:
-                tmp = self.cfg.trade_log_file + ".tmp"
-                with open(tmp, "w") as f:
-                    json.dump(self.trades, f, indent=2)
-                os.replace(tmp, self.cfg.trade_log_file)
-            except Exception as e:
-                log.error(f"Could not save trade log: {e}")
+        try:
+            tmp = self.cfg.trade_log_file + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.trades, f, indent=2)
+            os.replace(tmp, self.cfg.trade_log_file)
+        except Exception as e:
+            log.error(f"Could not save trade log: {e}")
 
     def log_signal(self, signal: TradeSignal):
         entry = signal.to_dict()
@@ -1411,7 +1329,6 @@ class Dashboard:
         self.cfg      = cfg
         self.logger   = logger
         self.executor = executor
-        self.lock     = threading.Lock()
 
     def update(self, latest_signals: List[dict], equity: float = 0.0,
                risk_status: str = "OK"):
@@ -1449,11 +1366,10 @@ class Dashboard:
                 }
 
         try:
-            with self.lock:
-                tmp = self.cfg.dashboard_file + ".tmp"
-                with open(tmp, "w") as f:
-                    json.dump(data, f, indent=2)
-                os.replace(tmp, self.cfg.dashboard_file)
+            tmp = self.cfg.dashboard_file + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, self.cfg.dashboard_file)
         except Exception as e:
             log.error(f"Dashboard write error: {e}")
 
@@ -1466,7 +1382,7 @@ class Backtester:
     """
     Walk-forward backtest over historical OHLCV data.
 
-    Uses the same signal logic as the live engine — no look-ahead bias.
+    Uses the same signal logic as the live engine ? no look-ahead bias.
     Simulates SL/TP on each bar using High/Low (conservative approach).
     """
 
@@ -1565,12 +1481,10 @@ class Backtester:
                         sl = entry + sl_d
                         tp = entry - tp_d
 
-                    pip_size  = 0.01 if "JPY" in symbol else 0.0001
-                    pip_value = 9.0  if "JPY" in symbol else 10.0
-                    
-                    lots = (capital * self.cfg.risk_per_trade_pct) / ((sl_d / pip_size) * pip_value)
-                    lots = round(lots / self.cfg.lot_step) * self.cfg.lot_step
-                    lots = max(self.cfg.lot_min, min(lots, self.cfg.lot_max))
+                    lots = max(self.cfg.lot_min, min(
+                        round((capital * self.cfg.risk_per_trade_pct) / (sl_d / 0.0001 * 10.0), 2),
+                        self.cfg.lot_max
+                    ))
 
                     position = {
                         "side":      signal,
@@ -1602,7 +1516,7 @@ class Backtester:
 
     def _backtest_signal(self, window: pd.DataFrame) -> Tuple[Optional[str], int]:
         """
-        Simplified signal for backtesting (single timeframe — daily).
+        Simplified signal for backtesting (single timeframe ? daily).
         Returns (signal_direction, confluence_score).
         """
         if len(window) < 60:
@@ -1645,7 +1559,7 @@ class Backtester:
                equity_curve: list) -> dict:
         if not trades:
             log.warning("Backtest: no trades generated")
-            return {"total_trades": 0, "note": "No trades — check confluence settings"}
+            return {"total_trades": 0, "note": "No trades ? check confluence settings"}
 
         pnls   = [t["pnl_usd"] for t in trades]
         wins   = [p for p in pnls if p > 0]
@@ -1698,46 +1612,17 @@ class MT5Manager:
         self.cfg       = cfg
         self.connected = False
 
-    def _load_config_file(self) -> Dict[str, str]:
-        """Lazy load credentials from the 'config' file if present."""
-        creds = {}
-        try:
-            if os.path.exists("config"):
-                with open("config", "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if "=" in line:
-                            key, val = line.split("=", 1)
-                            creds[key.strip().upper()] = val.strip().strip('"')
-        except Exception as e:
-            log.warning(f"Failed to read 'config' file: {e}")
-        return creds
-
     def connect(self) -> bool:
         if not HAS_MT5:
             log.error("MetaTrader5 package not installed")
             return False
 
-        # Try environment variables first
-        login_str = os.environ.get("MT5_LOGIN")
-        password  = os.environ.get("MT5_PASSWORD")
-        server    = os.environ.get("MT5_SERVER")
+        login    = int(os.environ.get("MT5_LOGIN", "0"))
+        password = os.environ.get("MT5_PASSWORD", "")
+        server   = os.environ.get("MT5_SERVER", "")
 
-        # Fallback to config file
-        if not login_str or not password or not server:
-            creds = self._load_config_file()
-            login_str = login_str or creds.get("LOGIN")
-            password  = password  or creds.get("PASSWORD")
-            server    = server    or creds.get("SERVER")
-
-        if not login_str:
-            log.error("MT5_LOGIN not set (env var or config file)")
-            return False
-
-        try:
-            login = int(login_str)
-        except ValueError:
-            log.error(f"MT5_LOGIN must be an integer, got '{login_str}'")
+        if login == 0:
+            log.error("MT5_LOGIN env var not set")
             return False
 
         if not mt5.initialize():
@@ -1751,7 +1636,7 @@ class MT5Manager:
 
         acc = mt5.account_info()
         log.info(
-            f"MT5 connected >> Login={acc.login} Balance={acc.balance:.2f} "
+            f"MT5 connected > Login={acc.login} Balance={acc.balance:.2f} "
             f"Equity={acc.equity:.2f} Server={acc.server}"
         )
         self.connected = True
@@ -1789,15 +1674,15 @@ class HaldaneTradingBot:
     The main orchestrator. Ties all components together.
 
     Components:
-      DataFetcher    — OHLCV data from YF or MT5
-      SignalEngine   — Multi-timeframe confluence signals
-      MLFilter       — Optional probability filter
-      TradeExecutor  — Order placement and trailing SL
-      RiskManager    — Daily loss limits, position sizing checks
-      TradeLogger    — Persistent trade history + stats
-      Dashboard      — JSON status export
-      MT5Manager     — Connection management
-      Backtester     — Historical simulation
+      DataFetcher    ? OHLCV data from YF or MT5
+      SignalEngine   ? Multi-timeframe confluence signals
+      MLFilter       ? Optional probability filter
+      TradeExecutor  ? Order placement and trailing SL
+      RiskManager    ? Daily loss limits, position sizing checks
+      TradeLogger    ? Persistent trade history + stats
+      Dashboard      ? JSON status export
+      MT5Manager     ? Connection management
+      Backtester     ? Historical simulation
     """
 
     def __init__(self, cfg: Optional[BotConfig] = None):
@@ -1842,55 +1727,52 @@ class HaldaneTradingBot:
                     log.error(f"ML training failed for {symbol}: {e}")
 
     # -- Single symbol processing ----------------------------------------------
-    # -- Signal processing and execution -------------------------------------
-    def process_trade(self, signal: TradeSignal, equity: float,
-                      open_count: int, max_pos_limit: int) -> bool:
+    def process_symbol(self, symbol: str, equity: float,
+                       open_count: int) -> Optional[TradeSignal]:
         """
-        Final verification and execution of a trade signal.
+        Run the full pipeline for one symbol.
+        Returns TradeSignal if a trade was executed, else None.
         """
-        # Risk check with dynamic limit
-        if open_count >= max_pos_limit:
-            log.debug(f"{signal.symbol}: trade limit reached ({open_count}/{max_pos_limit}). Skipping.")
-            return False
-
         use_mt5 = self.cfg.live_trading and HAS_MT5
 
+        # Risk check
+        can_trade, reason = self.risk_mgr.can_open_trade(equity, open_count)
+        if not can_trade:
+            log.debug(f"{symbol}: {reason}")
+            return None
+
         # Already have position on this symbol?
-        if use_mt5 and self.executor.has_position_for(signal.symbol):
-            log.debug(f"{signal.symbol}: position already open")
-            return False
+        if use_mt5 and self.executor.has_position_for(symbol):
+            log.debug(f"{symbol}: position already open")
+            return None
+
+        # Generate signal
+        signal = self.engine.generate(symbol, equity, use_mt5)
+        if signal is None:
+            return None
 
         # ML probability filter
-        if self.cfg.use_ml and signal.symbol in self.ml.models:
-            df15 = self.fetcher.fetch(signal.symbol, self.cfg.entry_tf, use_mt5)
+        if self.cfg.use_ml and symbol in self.ml.models:
+            df15 = self.fetcher.fetch(symbol, self.cfg.entry_tf, use_mt5)
             if not df15.empty:
                 df15 = Indicators.add_all(df15, self.cfg)
-                ml_prob = self.ml.predict_probability(signal.symbol, df15, signal.trend)
+                ml_prob = self.ml.predict_probability(symbol, df15, signal.trend)
                 signal.ml_probability = ml_prob
                 if ml_prob < self.cfg.ml_min_probability:
                     log.info(
-                        f"{signal.symbol}: ML prob {ml_prob:.2f} < "
+                        f"{symbol}: ML prob {ml_prob:.2f} < "
                         f"{self.cfg.ml_min_probability}. Skipping."
                     )
-                    return False
+                    return None
 
         # Log and execute
         self.logger.log_signal(signal)
         self.recent_signals.append(signal.to_dict())
 
         executed = self.executor.execute(signal, live=self.cfg.live_trading)
-        return executed
+        if executed:
+            return signal
 
-    def process_symbol(self, symbol: str, equity: float,
-                       open_count: int) -> Optional[TradeSignal]:
-        """
-        Legacy method kept for compatibility.
-        """
-        use_mt5 = self.cfg.live_trading and HAS_MT5
-        sig = self.engine.generate(symbol, equity, use_mt5)
-        if sig:
-            if self.process_trade(sig, equity, open_count, self.cfg.max_positions):
-                return sig
         return None
 
     # -- Main loop -------------------------------------------------------------
@@ -1900,7 +1782,7 @@ class HaldaneTradingBot:
         self.setup()
 
         log.info("=" * 55)
-        log.info("  HALDANE BOT v3 — TRADING LOOP STARTED")
+        log.info("  HALDANE BOT v3 ? TRADING LOOP STARTED")
         log.info("=" * 55)
 
         loop_count = 0
@@ -1919,7 +1801,7 @@ class HaldaneTradingBot:
 
                 # Check daily loss limit
                 if not self.risk_mgr.check_daily_loss(equity):
-                    log.warning("⛔ Daily loss limit active. Skipping all trades.")
+                    log.warning("? Daily loss limit active. Skipping all trades.")
                     self._sleep_and_dashboard(equity, "PAUSED - daily loss limit")
                     continue
 
@@ -1935,23 +1817,9 @@ class HaldaneTradingBot:
                     self.executor.update_trailing_sl()
 
                 # Process each symbol
-                # Dynamic max positions: if a signal has very high confidence, we temporarily allow more
-                current_max = self.cfg.max_positions
-
                 for symbol in self.cfg.symbols:
                     try:
-                        # Check for signal first to see confidence
-                        use_mt5 = self.cfg.live_trading and HAS_MT5
-                        sig = self.engine.generate(symbol, equity, use_mt5)
-                        
-                        if sig:
-                            # If very high confidence, boost max positions
-                            if sig.confidence >= 0.4:
-                                log.info(f"🔥 High confidence detected ({sig.confidence}). Boosting max trades to {self.cfg.max_positions + 1}")
-                                current_max = self.cfg.max_positions + 1
-                            
-                            # Now process with the (possibly boosted) limit
-                            self.process_trade(sig, equity, open_count, current_max)
+                        self.process_symbol(symbol, equity, open_count)
                     except Exception as e:
                         log.error(f"Error processing {symbol}: {e}")
                         log.debug(traceback.format_exc())
@@ -1959,7 +1827,7 @@ class HaldaneTradingBot:
                 self._sleep_and_dashboard(equity, "OK")
 
             except KeyboardInterrupt:
-                log.info("\nKeyboard interrupt — shutting down gracefully")
+                log.info("\nKeyboard interrupt ? shutting down gracefully")
                 self.running = False
                 break
             except Exception as e:
@@ -1984,12 +1852,12 @@ class HaldaneTradingBot:
                 f"PnL=${stats.get('total_pnl_usd', 0):.2f} "
                 f"PF={stats.get('profit_factor', 0):.2f}"
             )
-        log.info(f"Sleeping {self.cfg.interval_seconds}s until next cycle…")
+        log.info(f"Sleeping {self.cfg.interval_seconds}s until next cycle?")
         time.sleep(self.cfg.interval_seconds)
 
     def shutdown(self):
         """Clean shutdown."""
-        log.info("Shutting down HaldaneBot…")
+        log.info("Shutting down HaldaneBot?")
         self.logger.save()
         if self.cfg.live_trading:
             self.mt5_mgr.disconnect()
@@ -2028,8 +1896,36 @@ class HaldaneTradingBot:
 #  ENTRY POINT
 # -----------------------------------------------------------------------------
 
+def load_mt5_config():
+    """Load MT5 credentials from the config file into environment variables."""
+    config_path = "config"
+    if not os.path.exists(config_path):
+        log.warning("Config file not found. Using environment variables.")
+        return
+    try:
+        with open(config_path, "r") as f:
+            for line in f:
+                if "=" in line:
+                    key, val = line.strip().split("=", 1)
+                    key = key.strip().upper()
+                    val = val.strip().strip('"').strip("'")
+                    if key == "LOGIN":
+                        os.environ["MT5_LOGIN"] = val
+                        log.info(f"Loaded MT5_LOGIN: {val}")
+                    elif key == "PASSWORD":
+                        os.environ["MT5_PASSWORD"] = val
+                        log.info("Loaded MT5_PASSWORD (hidden)")
+                    elif key == "SERVER":
+                        os.environ["MT5_SERVER"] = val
+                        log.info(f"Loaded MT5_SERVER: {val}")
+    except Exception as e:
+        log.error(f"Error reading config file: {e}")
+
 def main():
     """Main entry point. Parses arguments and runs the appropriate mode."""
+
+    # -- Load MT5 Config -------------------------------------------------------
+    load_mt5_config()
 
     # -- Configuration ---------------------------------------------------------
     cfg = BotConfig(
@@ -2051,7 +1947,7 @@ def main():
         min_confluence=3,                # Need 3/5 indicators to agree
 
         # Risk management
-        risk_per_trade_pct=0.01,         # 1% per trade — NEVER go higher
+        risk_per_trade_pct=0.01,         # 1% per trade ? NEVER go higher
         sl_atr_multiplier=1.5,
         tp_rr_ratio=2.0,
         min_rr_ratio=1.8,
@@ -2059,13 +1955,13 @@ def main():
         max_daily_loss_pct=0.03,         # Stop trading after 3% daily loss
 
         # Execution
-        live_trading=True,               # ← Set True to trade on MT5
+        live_trading=True,              # ? Set True + MT5 env vars for live
         lot_min=0.01,
         lot_max=0.10,                    # Keep small on a $10 account
         spread_max_pips=3.0,
 
         # Sessions
-        trade_sessions=[(7, 16), (13, 22)],
+        trade_sessions=[(0, 24)],        # 24/7 for testing
 
         # ML (optional, needs scikit-learn)
         use_ml=False,
@@ -2080,7 +1976,7 @@ def main():
     if "--backtest" in args:
         # -- Backtest mode ----------------------------------------------------
         print("\n" + "=" * 60)
-        print("  HALDANE BOT v3 — BACKTEST MODE")
+        print("  HALDANE BOT v3 ? BACKTEST MODE")
         print("=" * 60)
 
         bot = HaldaneTradingBot(cfg)
@@ -2095,7 +1991,7 @@ def main():
     elif "--signal" in args:
         # -- Signal check mode ------------------------------------------------
         print("\n" + "=" * 60)
-        print("  HALDANE BOT v3 — CURRENT SIGNALS")
+        print("  HALDANE BOT v3 ? CURRENT SIGNALS")
         print("=" * 60)
 
         bot = HaldaneTradingBot(cfg)
@@ -2106,14 +2002,14 @@ def main():
             s      = sig.get("signal", "HOLD")
             if hasattr(s, "value"):
                 s = s.value
-            entry  = sig.get("entry_price", "—")
-            sl     = sig.get("stop_loss", "—")
-            tp     = sig.get("take_profit", "—")
-            score  = sig.get("confluence_score", "—")
+            entry  = sig.get("entry_price", "?")
+            sl     = sig.get("stop_loss", "?")
+            tp     = sig.get("take_profit", "?")
+            score  = sig.get("confluence_score", "?")
             reason = sig.get("reason", sig.get("reason", "No signal"))
-            rr     = sig.get("rr_ratio", "—")
+            rr     = sig.get("rr_ratio", "?")
 
-            marker = ">" if s in ("BUY", "SELL") else "."
+            marker = ">" if s in ("BUY", "SELL") else "*"
             print(f"\n  {marker} {symbol}: {s}")
             if s in ("BUY", "SELL"):
                 print(f"    Entry={entry}  SL={sl}  TP={tp}  RR={rr}")
@@ -2133,7 +2029,7 @@ def main():
     else:
         # -- Live / paper trading mode ----------------------------------------
         print("\n" + "=" * 60)
-        print("  HALDANE BOT v3 — LIVE TRADING")
+        print("  HALDANE BOT v3 ? LIVE TRADING")
         print(f"  Mode: {'LIVE (MT5)' if cfg.live_trading else 'PAPER'}")
         print("=" * 60)
         print("\n  MT5 env vars needed for live mode:")
