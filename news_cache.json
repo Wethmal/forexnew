@@ -1,0 +1,659 @@
+{
+  "last_fetch": "2026-04-17T19:25:38.599706",
+  "events": [
+    {
+      "title": "BusinessNZ Services Index",
+      "currency": "NZD",
+      "time": "2026-04-12T18:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "M2 Money Stock y/y",
+      "currency": "JPY",
+      "time": "2026-04-12T19:50:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "M2 Money Supply y/y",
+      "currency": "CNY",
+      "time": "2026-04-13T05:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "New Loans",
+      "currency": "CNY",
+      "time": "2026-04-13T05:01:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Building Permits m/m",
+      "currency": "CAD",
+      "time": "2026-04-13T08:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Existing Home Sales",
+      "currency": "USD",
+      "time": "2026-04-13T10:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "IMF Meetings",
+      "currency": "ALL",
+      "time": "2026-04-13T10:15:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "RBA Deputy Gov Hauser Speaks",
+      "currency": "AUD",
+      "time": "2026-04-13T18:15:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FOMC Member Miran Speaks",
+      "currency": "USD",
+      "time": "2026-04-13T18:20:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Visitor Arrivals m/m",
+      "currency": "NZD",
+      "time": "2026-04-13T18:45:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "BRC Retail Sales Monitor y/y",
+      "currency": "GBP",
+      "time": "2026-04-13T19:01:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Westpac Consumer Sentiment",
+      "currency": "AUD",
+      "time": "2026-04-13T20:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "NAB Business Confidence",
+      "currency": "AUD",
+      "time": "2026-04-13T21:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "USD-Denominated Trade Balance",
+      "currency": "CNY",
+      "time": "2026-04-13T22:56:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Trade Balance",
+      "currency": "CNY",
+      "time": "2026-04-13T22:57:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Revised Industrial Production m/m",
+      "currency": "JPY",
+      "time": "2026-04-14T00:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "German WPI m/m",
+      "currency": "EUR",
+      "time": "2026-04-14T02:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "MPC Member Mann Speaks",
+      "currency": "GBP",
+      "time": "2026-04-14T04:50:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "NFIB Small Business Index",
+      "currency": "USD",
+      "time": "2026-04-14T06:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "ADP Weekly Employment Change",
+      "currency": "USD",
+      "time": "2026-04-14T08:15:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Core PPI m/m",
+      "currency": "USD",
+      "time": "2026-04-14T08:30:00-04:00",
+      "impact": "high"
+    },
+    {
+      "title": "PPI m/m",
+      "currency": "USD",
+      "time": "2026-04-14T08:30:00-04:00",
+      "impact": "high"
+    },
+    {
+      "title": "CB Leading Index m/m",
+      "currency": "GBP",
+      "time": "2026-04-14T09:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FOMC Member Goolsbee Speaks",
+      "currency": "USD",
+      "time": "2026-04-14T09:45:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "ECB President Lagarde Speaks",
+      "currency": "EUR",
+      "time": "2026-04-14T10:00:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "MPC Member Greene Speaks",
+      "currency": "GBP",
+      "time": "2026-04-14T10:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FOMC Member Goolsbee Speaks",
+      "currency": "USD",
+      "time": "2026-04-14T10:15:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "IMF Meetings",
+      "currency": "ALL",
+      "time": "2026-04-14T10:15:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "BOE Gov Bailey Speaks",
+      "currency": "GBP",
+      "time": "2026-04-14T12:05:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "FOMC Member Goolsbee Speaks",
+      "currency": "USD",
+      "time": "2026-04-14T12:10:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FOMC Member Barr Speaks",
+      "currency": "USD",
+      "time": "2026-04-14T12:45:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FOMC Member Barkin Speaks",
+      "currency": "USD",
+      "time": "2026-04-14T13:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FOMC Member Collins Speaks",
+      "currency": "USD",
+      "time": "2026-04-14T13:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FOMC Member Paulson Speaks",
+      "currency": "USD",
+      "time": "2026-04-14T13:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "MPC Member Breeden Speaks",
+      "currency": "GBP",
+      "time": "2026-04-14T16:10:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "API Weekly Statistical Bulletin",
+      "currency": "USD",
+      "time": "2026-04-14T16:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "ECB President Lagarde Speaks",
+      "currency": "EUR",
+      "time": "2026-04-14T17:00:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "Core Machinery Orders m/m",
+      "currency": "JPY",
+      "time": "2026-04-14T19:50:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "French Final CPI m/m",
+      "currency": "EUR",
+      "time": "2026-04-15T02:45:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Industrial Production m/m",
+      "currency": "EUR",
+      "time": "2026-04-15T05:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "German 30-y Bond Auction",
+      "currency": "EUR",
+      "time": "2026-04-15T05:34:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "President Trump Speaks",
+      "currency": "USD",
+      "time": "2026-04-15T06:00:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "Manufacturing Sales m/m",
+      "currency": "CAD",
+      "time": "2026-04-15T08:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Wholesale Sales m/m",
+      "currency": "CAD",
+      "time": "2026-04-15T08:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Empire State Manufacturing Index",
+      "currency": "USD",
+      "time": "2026-04-15T08:30:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "FOMC Member Barr Speaks",
+      "currency": "USD",
+      "time": "2026-04-15T08:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FOMC Member Hammack Speaks",
+      "currency": "USD",
+      "time": "2026-04-15T08:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Import Prices m/m",
+      "currency": "USD",
+      "time": "2026-04-15T08:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "NAHB Housing Market Index",
+      "currency": "USD",
+      "time": "2026-04-15T10:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "IMF Meetings",
+      "currency": "ALL",
+      "time": "2026-04-15T10:15:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "CB Leading Index m/m",
+      "currency": "AUD",
+      "time": "2026-04-15T10:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Crude Oil Inventories",
+      "currency": "USD",
+      "time": "2026-04-15T10:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "BOE Gov Bailey Speaks",
+      "currency": "GBP",
+      "time": "2026-04-15T11:50:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "SNB Chairman Schlegel Speaks",
+      "currency": "CHF",
+      "time": "2026-04-15T13:00:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "RBNZ Gov Breman Speaks",
+      "currency": "NZD",
+      "time": "2026-04-15T13:00:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "FOMC Member Bowman Speaks",
+      "currency": "USD",
+      "time": "2026-04-15T13:45:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "BOE Gov Bailey Speaks",
+      "currency": "GBP",
+      "time": "2026-04-15T14:00:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "Beige Book",
+      "currency": "USD",
+      "time": "2026-04-15T14:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "ECB President Lagarde Speaks",
+      "currency": "EUR",
+      "time": "2026-04-15T15:30:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "RBA Deputy Gov Hauser Speaks",
+      "currency": "AUD",
+      "time": "2026-04-15T16:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "TIC Long-Term Purchases",
+      "currency": "USD",
+      "time": "2026-04-15T16:04:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "MI Inflation Expectations",
+      "currency": "AUD",
+      "time": "2026-04-15T21:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Employment Change",
+      "currency": "AUD",
+      "time": "2026-04-15T21:30:00-04:00",
+      "impact": "high"
+    },
+    {
+      "title": "Unemployment Rate",
+      "currency": "AUD",
+      "time": "2026-04-15T21:30:00-04:00",
+      "impact": "high"
+    },
+    {
+      "title": "New Home Prices m/m",
+      "currency": "CNY",
+      "time": "2026-04-15T21:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Fixed Asset Investment ytd/y",
+      "currency": "CNY",
+      "time": "2026-04-15T22:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "GDP q/y",
+      "currency": "CNY",
+      "time": "2026-04-15T22:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Industrial Production y/y",
+      "currency": "CNY",
+      "time": "2026-04-15T22:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "NBS Press Conference",
+      "currency": "CNY",
+      "time": "2026-04-15T22:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Retail Sales y/y",
+      "currency": "CNY",
+      "time": "2026-04-15T22:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Unemployment Rate",
+      "currency": "CNY",
+      "time": "2026-04-15T22:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "GDP m/m",
+      "currency": "GBP",
+      "time": "2026-04-16T02:00:00-04:00",
+      "impact": "high"
+    },
+    {
+      "title": "Construction Output m/m",
+      "currency": "GBP",
+      "time": "2026-04-16T02:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Goods Trade Balance",
+      "currency": "GBP",
+      "time": "2026-04-16T02:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Index of Services 3m/3m",
+      "currency": "GBP",
+      "time": "2026-04-16T02:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Industrial Production m/m",
+      "currency": "GBP",
+      "time": "2026-04-16T02:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Manufacturing Production m/m",
+      "currency": "GBP",
+      "time": "2026-04-16T02:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "PPI m/m",
+      "currency": "CHF",
+      "time": "2026-04-16T02:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Summary of Monetary Policy Discussions",
+      "currency": "CHF",
+      "time": "2026-04-16T03:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Final Core CPI y/y",
+      "currency": "EUR",
+      "time": "2026-04-16T05:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Final CPI y/y",
+      "currency": "EUR",
+      "time": "2026-04-16T05:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "ECB Monetary Policy Meeting Accounts",
+      "currency": "EUR",
+      "time": "2026-04-16T07:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Philly Fed Manufacturing Index",
+      "currency": "USD",
+      "time": "2026-04-16T08:30:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "Unemployment Claims",
+      "currency": "USD",
+      "time": "2026-04-16T08:30:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "FOMC Member Williams Speaks",
+      "currency": "USD",
+      "time": "2026-04-16T08:35:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Capacity Utilization Rate",
+      "currency": "USD",
+      "time": "2026-04-16T09:15:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Industrial Production m/m",
+      "currency": "USD",
+      "time": "2026-04-16T09:15:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "IMF Meetings",
+      "currency": "ALL",
+      "time": "2026-04-16T10:15:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Natural Gas Storage",
+      "currency": "USD",
+      "time": "2026-04-16T10:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FOMC Member Miran Speaks",
+      "currency": "USD",
+      "time": "2026-04-16T10:35:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "MPC Member Taylor Speaks",
+      "currency": "GBP",
+      "time": "2026-04-16T11:40:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Gov Board Member Tschudin Speaks",
+      "currency": "CHF",
+      "time": "2026-04-16T12:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "German Buba President Nagel Speaks",
+      "currency": "EUR",
+      "time": "2026-04-16T12:45:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "RBA Assist Gov Hunter Speaks",
+      "currency": "AUD",
+      "time": "2026-04-16T14:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "MPC Member Taylor Speaks",
+      "currency": "GBP",
+      "time": "2026-04-16T15:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FPI m/m",
+      "currency": "NZD",
+      "time": "2026-04-16T18:45:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "President Trump Speaks",
+      "currency": "USD",
+      "time": "2026-04-16T19:00:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "Current Account",
+      "currency": "EUR",
+      "time": "2026-04-17T04:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Italian Trade Balance",
+      "currency": "EUR",
+      "time": "2026-04-17T04:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Trade Balance",
+      "currency": "EUR",
+      "time": "2026-04-17T05:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "MPC Member Pill Speaks",
+      "currency": "GBP",
+      "time": "2026-04-17T08:00:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Housing Starts",
+      "currency": "CAD",
+      "time": "2026-04-17T08:15:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "Foreign Securities Purchases",
+      "currency": "CAD",
+      "time": "2026-04-17T08:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "IMF Meetings",
+      "currency": "ALL",
+      "time": "2026-04-17T10:15:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FOMC Member Daly Speaks",
+      "currency": "USD",
+      "time": "2026-04-17T11:30:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FOMC Member Barkin Speaks",
+      "currency": "USD",
+      "time": "2026-04-17T12:15:00-04:00",
+      "impact": "low"
+    },
+    {
+      "title": "FOMC Member Waller Speaks",
+      "currency": "USD",
+      "time": "2026-04-17T14:00:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "President Trump Speaks",
+      "currency": "USD",
+      "time": "2026-04-17T17:00:00-04:00",
+      "impact": "medium"
+    },
+    {
+      "title": "IMF Meetings",
+      "currency": "ALL",
+      "time": "2026-04-18T10:15:00-04:00",
+      "impact": "low"
+    }
+  ]
+}

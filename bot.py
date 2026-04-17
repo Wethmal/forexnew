@@ -1,44 +1,39 @@
 """
-+==============================================================================+
-|        GOLDEN STRATEGY TRADING BOT v4.0 — HIGH-ACCURACY EDITION            |
-|                                                                              |
-|  Strategy 1: Trend-Momentum (Golden Cross + RSI Pullback)                   |
-|  Strategy 2: Mean Reversion (Bollinger Bands + Stochastic)                  |
-|  Strategy 3: Price Action + MACD Divergence Confluence                      |
-|                                                                              |
-|  Key Improvements Over v3:                                                  |
-|    - MACD Divergence detection (bull/bear regular + hidden)                 |
-|    - Pin Bar & Engulfing candle recognition                                  |
-|    - Support/Resistance level detection from swing highs/lows               |
-|    - Stochastic crossover filtering (not just levels)                       |
-|    - Volume confirmation on every signal                                    |
-|    - Signal scoring: each strategy scored independently (0-10)              |
-|    - Only trades with combined score >= threshold are taken                 |
-|    - Walk-forward backtest with per-strategy attribution                    |
-|                                                                              |
-|  Author : Golden System v4                                                   |
-|  Run    : python golden_strategy_bot.py [--backtest] [--signal] [--live]   |
-+==============================================================================+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║           GOLDEN BOT v5 — SIGNAL SCANNER + PAPER/LIVE TRADER               ║
+║                                                                              ║
+║  DEFAULT MODE: PAPER TRADING (no real money at risk)                        ║
+║  TO ENABLE LIVE: Set LIVE_TRADING = True in Config AND set MT5 credentials  ║
+║                                                                              ║
+║  Strategies:                                                                 ║
+║    S1 — EMA Cross + RSI Pullback (trend-momentum)                           ║
+║    S2 — Bollinger Band + Stochastic (mean reversion)                        ║
+║    S3 — MACD Divergence + Price Action (confluence)                         ║
+║                                                                              ║
+║  Safety rules built-in:                                                     ║
+║    - Max 1% risk per trade                                                   ║
+║    - Max 3% daily loss (bot pauses if hit)                                  ║
+║    - Max 3 open positions                                                    ║
+║    - Stop after 3 consecutive losses                                         ║
+║    - Spread check before every entry                                         ║
+║    - News filter (Finnhub / Forex Factory)                                  ║
+║                                                                              ║
+║  Install:  pip install yfinance pandas numpy requests                        ║
+║  MT5 live: pip install MetaTrader5  (Windows only)                          ║
+║                                                                              ║
+║  Run:                                                                        ║
+║    python golden_bot_v5.py --paper       (safe, no real money)              ║
+║    python golden_bot_v5.py --signal      (print signals once and exit)      ║
+║    python golden_bot_v5.py --backtest    (historical test)                  ║
+║    python golden_bot_v5.py --stats       (show trade journal stats)         ║
+║    python golden_bot_v5.py --live        (REAL MONEY — requires MT5 setup)  ║
+╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
-# ---------------------------------------------------------------------------
-# IMPORTS
-# ---------------------------------------------------------------------------
-
-import os
-import sys
-import json
-import time
-import logging
-import warnings
-import traceback
-import requests
-import xml.etree.ElementTree as ET
-try:
-    import pytz
-except ImportError:
-    pytz = None
-
+# ─────────────────────────────────────────────
+#  IMPORTS
+# ─────────────────────────────────────────────
+import os, sys, json, time, logging, warnings, traceback, requests
 from copy import deepcopy
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field, asdict
@@ -51,6 +46,7 @@ import yfinance as yf
 
 warnings.filterwarnings("ignore")
 
+# Optional dependencies
 try:
     import MetaTrader5 as mt5
     HAS_MT5 = True
@@ -58,24 +54,30 @@ except ImportError:
     HAS_MT5 = False
 
 try:
+    import pytz
+    HAS_PYTZ = True
+except ImportError:
+    HAS_PYTZ = False
+
+try:
     from sklearn.ensemble import GradientBoostingClassifier
     from sklearn.preprocessing import RobustScaler
-    from sklearn.metrics import accuracy_score, f1_score
+    from sklearn.metrics import accuracy_score
     HAS_SKL = True
 except ImportError:
     HAS_SKL = False
 
-# ---------------------------------------------------------------------------
-# LOGGING
-# ---------------------------------------------------------------------------
 
+# ─────────────────────────────────────────────
+#  LOGGING
+# ─────────────────────────────────────────────
 LOG_FORMAT = "%(asctime)s [%(levelname)-8s] %(message)s"
-logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stdout)
 log = logging.getLogger("GoldenBot")
 
-class ColorFormatter(logging.Formatter):
-    RESET  = "\033[0m"
-    COLORS = {
+class ColorLog(logging.Formatter):
+    RESET = "\033[0m"
+    MAP   = {
         logging.DEBUG:    "\033[90m",
         logging.INFO:     "\033[0m",
         logging.WARNING:  "\033[93m",
@@ -83,1984 +85,1314 @@ class ColorFormatter(logging.Formatter):
         logging.CRITICAL: "\033[95m",
     }
     def format(self, record):
-        color = self.COLORS.get(record.levelno, self.RESET)
+        c   = self.MAP.get(record.levelno, self.RESET)
         msg = super().format(record)
         msg = msg.replace("BUY",  "\033[92mBUY\033[0m")
         msg = msg.replace("SELL", "\033[91mSELL\033[0m")
         msg = msg.replace("WIN",  "\033[92mWIN\033[0m")
         msg = msg.replace("LOSS", "\033[91mLOSS\033[0m")
-        return f"{color}{msg}{self.RESET}"
+        return f"{c}{msg}{self.RESET}"
 
 for h in logging.root.handlers:
-    h.setFormatter(ColorFormatter(LOG_FORMAT))
+    h.setFormatter(ColorLog(LOG_FORMAT))
 
 
-# ---------------------------------------------------------------------------
-# CONFIGURATION
-# ---------------------------------------------------------------------------
-
+# ─────────────────────────────────────────────
+#  CONFIGURATION  ← edit here
+# ─────────────────────────────────────────────
 @dataclass
-class GoldenConfig:
-    # Symbols
+class Config:
+
+    # ── Symbols ─────────────────────────────
     symbols: List[str] = field(default_factory=lambda: [
         "EURUSD", "GBPUSD", "USDJPY", "AUDUSD"
     ])
-    mt5_symbol_suffix: str = ""
+    mt5_suffix: str = ""          # e.g. "m" if broker appends 'm' to symbols
 
-    # Timeframes
-    trend_tf:   str = "1h"
-    entry_tf:   str = "15m"
-    confirm_tf: str = "4h"
+    # ── Timeframes ──────────────────────────
+    tf_entry:   str = "15m"
+    tf_trend:   str = "1h"
+    tf_confirm: str = "4h"
 
-    # --- Strategy 1: Trend-Momentum (Golden Cross) ---
-    ema_fast:     int   = 9
-    ema_slow:     int   = 21
-    ema_50:       int   = 50
-    ema_200:      int   = 200
-    rsi_period:   int   = 14
-    rsi_pullback_min: float = 40.0   # RSI must have pulled back to at least 40
-    rsi_pullback_max: float = 55.0   # ...but not gone below 40 (still bullish)
-    rsi_overbought:   float = 70.0
-    rsi_oversold:     float = 30.0
+    # ── EMA / RSI ───────────────────────────
+    ema_fast:  int   = 9
+    ema_slow:  int   = 21
+    ema_50:    int   = 50
+    ema_200:   int   = 200
+    rsi_period: int  = 14
+    rsi_bull_lo: float = 40.0    # RSI pullback zone for BUY
+    rsi_bull_hi: float = 55.0
+    rsi_ob:     float = 70.0     # Overbought
+    rsi_os:     float = 30.0     # Oversold
 
-    # --- Strategy 2: Mean Reversion (Bollinger + Stochastic) ---
+    # ── Bollinger / Stochastic ───────────────
     bb_period: int   = 20
     bb_std:    float = 2.0
     stoch_k:   int   = 14
     stoch_d:   int   = 3
     stoch_smooth: int = 3
-    stoch_overbought: float = 80.0
-    stoch_oversold:   float = 20.0
-    bb_touch_pct:     float = 0.002  # Price within 0.2% of band counts as "touch"
+    stoch_ob:  float = 80.0
+    stoch_os:  float = 20.0
+    bb_touch:  float = 0.002     # within 0.2% counts as "touch"
 
-    # --- Strategy 3: MACD Divergence + Price Action ---
-    macd_fast:   int = 12
-    macd_slow:   int = 26
-    macd_signal: int = 9
-    divergence_lookback: int = 30   # Bars to look back for divergence
-    sr_lookback: int = 50           # Bars to look back for S/R levels
-    sr_tolerance_pct: float = 0.003 # S/R zone tolerance (0.3%)
-    pin_bar_ratio: float = 0.6      # Shadow must be at least 60% of total range
-    engulfing_ratio: float = 1.1    # Body must be 110% of previous body
+    # ── MACD / Divergence / S/R ──────────────
+    macd_fast:    int   = 12
+    macd_slow:    int   = 26
+    macd_sig:     int   = 9
+    div_lookback: int   = 30
+    sr_lookback:  int   = 50
+    sr_tol:       float = 0.003  # 0.3% zone
+    pin_ratio:    float = 0.60
+    engulf_ratio: float = 1.10
 
-    # --- Shared signal thresholds ---
-    # Each strategy scores 0-10. Weighted combo must pass threshold.
-    s1_weight:  float = 0.35
-    s2_weight:  float = 0.30
-    s3_weight:  float = 0.35
-    min_score:  float = 5.5   # Out of 10 weighted
+    # ── Signal scoring ───────────────────────
+    w1: float = 0.35             # S1 weight
+    w2: float = 0.30             # S2 weight
+    w3: float = 0.35             # S3 weight
+    min_score: float = 6.0       # minimum combined score to trade (raised from 5.5)
 
-    # Volume confirmation
-    volume_ma:   int   = 20
-    volume_min:  float = 1.0   # Volume must be >= 1x average (no spike needed)
+    # ── Volume ───────────────────────────────
+    vol_period: int   = 20
+    vol_min:    float = 1.0
 
-    # ATR / Risk
-    atr_period:         int   = 14
-    sl_atr_multiplier:  float = 1.5
-    tp_rr_ratio:        float = 2.5   # Better RR for high-accuracy setups
-    min_rr_ratio:       float = 2.0
-    risk_per_trade_pct: float = 0.01
-    max_positions:      int   = 3
-    max_daily_loss_pct: float = 0.03
-    lot_min:    float = 0.01
-    lot_max:    float = 0.50
-    lot_step:   float = 0.01
-    spread_max_pips: float = 20.0
+    # ── ATR / Risk ───────────────────────────
+    atr_period:   int   = 14
+    sl_atr_mult:  float = 2.0
+    rr_target:    float = 2.5
+    rr_min:       float = 2.0
+    risk_pct:     float = 0.01   # 1% per trade
+    max_positions: int  = 3
+    daily_loss_limit: float = 0.03   # 3% daily loss stops bot
+    consec_loss_limit: int  = 3      # stop after N losses in a row
+    lot_min:  float = 0.01
+    lot_max:  float = 0.10
+    lot_step: float = 0.01
+    spread_max: float = 30.0     # pips
 
-    # News Filter
-    news_filter_enabled: bool = True
-    finnhub_api_key: str = "d7b1gppr01qtpbha68rgd7b1gppr01qtpbha68s0"
-    news_cache_file: str = "economic_news.json"
+    # ── News filter ──────────────────────────
+    news_enabled: bool  = True
+    finnhub_key:  str   = ""     # paste your free key from finnhub.io
+    news_cache:   str   = "news_cache.json"
 
-    # ML filter (optional)
-    use_ml:  bool  = True
-    ml_min_prob: float = 0.60
+    # ── ML filter (optional) ────────────────
+    use_ml:      bool  = False   # enable after bot proves itself in paper
+    ml_min_prob: float = 0.65
 
-    # Execution
-    live_trading: bool = True
-    mt5_magic:    int  = 20250417
-    mt5_comment:  str  = "GoldenBot v4"
+    # ── Execution ────────────────────────────
+    #
+    #  ⚠️  LIVE_TRADING IS FALSE BY DEFAULT.
+    #  Only set True after 2+ weeks of paper results show profit.
+    #
+    live_trading: bool = False
+    mt5_magic:   int  = 20250418
+    mt5_comment: str  = "GoldenBot v5"
 
-    # Sessions (UTC)
-    trade_sessions: List[Tuple[int, int]] = field(default_factory=lambda: [
-        (7, 16), (13, 22)
+    # ── Sessions (UTC hour ranges to trade) ──
+    sessions: List[Tuple[int, int]] = field(default_factory=lambda: [
+        (7, 16), (13, 22)        # London + NY overlap
     ])
 
-    interval_seconds: int = 60
-    dashboard_file:   str = "golden_dashboard.json"
-    trade_log_file:   str = "golden_trades.json"
+    # ── Files ────────────────────────────────
+    log_file:       str = "trades.json"
+    dashboard_file: str = "dashboard.json"
+    interval:       int = 60     # seconds between loops
+
+    def spread_limit(self, tf: str) -> float:
+        return {
+            "1m": 2.0, "5m": 3.0, "15m": 5.0,
+            "30m": 10.0, "1h": 15.0, "4h": 25.0
+        }.get(tf, self.spread_max)
 
 
-# ---------------------------------------------------------------------------
-# ENUMS & DATA CLASSES
-# ---------------------------------------------------------------------------
-
-class SignalType(Enum):
+# ─────────────────────────────────────────────
+#  ENUMS & DATA CLASSES
+# ─────────────────────────────────────────────
+class Dir(Enum):
     BUY  = "BUY"
     SELL = "SELL"
     HOLD = "HOLD"
 
-class StrategyTag(Enum):
-    GOLDEN_CROSS = "S1_GoldenCross"
-    MEAN_REVERT  = "S2_MeanReversion"
-    DIVERGENCE   = "S3_Divergence"
-    COMBO        = "COMBO"
-
-
-@dataclass
-class StrategyScore:
-    s1_score: float = 0.0   # Trend-Momentum score 0-10
-    s2_score: float = 0.0   # Mean Reversion score 0-10
-    s3_score: float = 0.0   # MACD Divergence score 0-10
-    s1_reasons: List[str] = field(default_factory=list)
-    s2_reasons: List[str] = field(default_factory=list)
-    s3_reasons: List[str] = field(default_factory=list)
-
-    def combined(self, cfg: GoldenConfig) -> float:
-        return (self.s1_score * cfg.s1_weight +
-                self.s2_score * cfg.s2_weight +
-                self.s3_score * cfg.s3_weight)
-
-    def dominant_strategy(self) -> StrategyTag:
-        scores = {
-            StrategyTag.GOLDEN_CROSS: self.s1_score,
-            StrategyTag.MEAN_REVERT:  self.s2_score,
-            StrategyTag.DIVERGENCE:   self.s3_score,
-        }
-        return max(scores, key=scores.get)
-
+class Strat(Enum):
+    S1 = "S1_EMACross"
+    S2 = "S2_MeanRevert"
+    S3 = "S3_Divergence"
+    COMBO = "COMBO"
 
 @dataclass
-class TradeSignal:
-    symbol:      str
-    signal:      SignalType
-    entry_price: float
-    stop_loss:   float
-    take_profit: float
-    sl_distance: float
-    tp_distance: float
-    rr_ratio:    float
-    lots:        float
-    confidence:  float
-    score:       StrategyScore
-    strategy:    str
-    rsi:         float
-    macd_hist:   float
-    atr:         float
-    spread_pips: float
-    reason:      str
-    timestamp:   str = field(default_factory=lambda: datetime.now().isoformat())
-    ml_probability: float = 0.5
+class Score:
+    s1: float = 0.0
+    s2: float = 0.0
+    s3: float = 0.0
+    r1: List[str] = field(default_factory=list)
+    r2: List[str] = field(default_factory=list)
+    r3: List[str] = field(default_factory=list)
+
+    def combined(self, cfg: Config) -> float:
+        return self.s1 * cfg.w1 + self.s2 * cfg.w2 + self.s3 * cfg.w3
+
+    def dominant(self) -> Strat:
+        m = max([(self.s1, Strat.S1), (self.s2, Strat.S2), (self.s3, Strat.S3)],
+                key=lambda x: x[0])
+        return m[1]
+
+@dataclass
+class Signal:
+    symbol:     str
+    direction:  Dir
+    entry:      float
+    sl:         float
+    tp:         float
+    sl_dist:    float
+    tp_dist:    float
+    rr:         float
+    lots:       float
+    confidence: float
+    score:      Score
+    strategy:   str
+    rsi:        float
+    macd_hist:  float
+    atr:        float
+    spread:     float
+    reason:     str
+    timestamp:  str = field(default_factory=lambda: datetime.now().isoformat())
+    ml_prob:    float = 0.5
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        d["signal"]   = self.signal.value
-        d["strategy"] = self.strategy
-        d["score_combined"] = self.score.combined(GoldenConfig())
+        d["direction"] = self.direction.value
+        d["score_combined"] = round(self.score.combined(Config()), 2)
         return d
 
 
-@dataclass
-class TradeResult:
-    symbol:          str
-    signal:          str
-    strategy:        str
-    entry_price:     float
-    exit_price:      float
-    stop_loss:       float
-    take_profit:     float
-    lots:            float
-    pnl_pips:        float
-    pnl_usd:         float
-    outcome:         str
-    entry_time:      str
-    exit_time:       str
-    duration_minutes: float
-    reason_for_exit: str
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-
-# ---------------------------------------------------------------------------
-# TECHNICAL INDICATORS — COMPREHENSIVE
-# ---------------------------------------------------------------------------
-
-class Indicators:
+# ─────────────────────────────────────────────
+#  INDICATORS
+# ─────────────────────────────────────────────
+class Ind:
 
     @staticmethod
-    def ema(series: pd.Series, period: int) -> pd.Series:
-        return series.ewm(span=period, adjust=False).mean()
+    def ema(s: pd.Series, n: int) -> pd.Series:
+        return s.ewm(span=n, adjust=False).mean()
 
     @staticmethod
-    def sma(series: pd.Series, period: int) -> pd.Series:
-        return series.rolling(window=period).mean()
+    def rsi(s: pd.Series, n: int = 14) -> pd.Series:
+        d = s.diff()
+        g = d.clip(lower=0).rolling(n).mean()
+        l = (-d.clip(upper=0)).rolling(n).mean()
+        return 100 - (100 / (1 + g / l.replace(0, np.nan)))
 
     @staticmethod
-    def rsi(series: pd.Series, period: int = 14) -> pd.Series:
-        delta = series.diff()
-        gain  = delta.clip(lower=0).rolling(period).mean()
-        loss  = (-delta.clip(upper=0)).rolling(period).mean()
-        rs    = gain / loss.replace(0, np.nan)
-        return 100 - (100 / (1 + rs))
+    def macd(s: pd.Series, f=12, sl=26, sig=9):
+        ml  = s.ewm(span=f, adjust=False).mean() - s.ewm(span=sl, adjust=False).mean()
+        msl = ml.ewm(span=sig, adjust=False).mean()
+        return ml, msl, ml - msl
 
     @staticmethod
-    def macd(series: pd.Series, fast=12, slow=26, signal=9):
-        fast_ema   = series.ewm(span=fast, adjust=False).mean()
-        slow_ema   = series.ewm(span=slow, adjust=False).mean()
-        macd_line  = fast_ema - slow_ema
-        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-        histogram  = macd_line - signal_line
-        return macd_line, signal_line, histogram
+    def bb(s: pd.Series, n=20, std=2.0):
+        mid = s.rolling(n).mean()
+        sd  = s.rolling(n).std()
+        return mid + sd*std, mid, mid - sd*std
 
     @staticmethod
-    def bollinger_bands(series: pd.Series, period=20, std_dev=2.0):
-        mid   = series.rolling(period).mean()
-        std   = series.rolling(period).std()
-        upper = mid + std * std_dev
-        lower = mid - std * std_dev
-        return upper, mid, lower
+    def stoch(df: pd.DataFrame, k=14, d=3, sm=3):
+        lo = df["Low"].rolling(k).min()
+        hi = df["High"].rolling(k).max()
+        sk = 100 * (df["Close"] - lo) / (hi - lo).replace(0, np.nan)
+        sk = sk.rolling(sm).mean()
+        return sk, sk.rolling(d).mean()
 
     @staticmethod
-    def stochastic(df: pd.DataFrame, k=14, d=3, smooth=3):
-        low_min  = df["Low"].rolling(k).min()
-        high_max = df["High"].rolling(k).max()
-        denom    = (high_max - low_min).replace(0, np.nan)
-        stoch_k  = 100 * ((df["Close"] - low_min) / denom)
-        stoch_k  = stoch_k.rolling(smooth).mean()
-        stoch_d  = stoch_k.rolling(d).mean()
-        return stoch_k, stoch_d
+    def atr(df: pd.DataFrame, n=14) -> pd.Series:
+        hl = df["High"] - df["Low"]
+        hc = (df["High"] - df["Close"].shift()).abs()
+        lc = (df["Low"]  - df["Close"].shift()).abs()
+        return pd.concat([hl, hc, lc], axis=1).max(axis=1).ewm(span=n, adjust=False).mean()
 
     @staticmethod
-    def atr(df: pd.DataFrame, period=14) -> pd.Series:
-        hl  = df["High"] - df["Low"]
-        hc  = (df["High"] - df["Close"].shift()).abs()
-        lc  = (df["Low"]  - df["Close"].shift()).abs()
-        tr  = pd.concat([hl, hc, lc], axis=1).max(axis=1)
-        return tr.ewm(span=period, adjust=False).mean()   # Wilder smoothing
+    def adx(df: pd.DataFrame, n=14):
+        hi, lo, cl = df["High"], df["Low"], df["Close"]
+        pdm = hi.diff().clip(lower=0)
+        ndm = (-lo.diff()).clip(lower=0)
+        pdm[pdm < ndm] = 0
+        ndm[ndm < pdm] = 0
+        tr  = pd.concat([hi-lo, (hi-cl.shift()).abs(), (lo-cl.shift()).abs()], axis=1).max(axis=1)
+        atr = tr.ewm(span=n, adjust=False).mean()
+        pdi = 100 * pdm.ewm(span=n, adjust=False).mean() / atr
+        ndi = 100 * ndm.ewm(span=n, adjust=False).mean() / atr
+        dx  = 100 * (pdi - ndi).abs() / (pdi + ndi).replace(0, np.nan)
+        return dx.ewm(span=n, adjust=False).mean(), pdi, ndi
 
     @staticmethod
-    def adx(df: pd.DataFrame, period=14):
-        high, low, close = df["High"], df["Low"], df["Close"]
-        plus_dm  = high.diff().clip(lower=0)
-        minus_dm = (-low.diff()).clip(lower=0)
-        plus_dm[plus_dm < minus_dm]   = 0
-        minus_dm[minus_dm < plus_dm]  = 0
-        tr = pd.concat([
-            high - low,
-            (high - close.shift()).abs(),
-            (low  - close.shift()).abs()
-        ], axis=1).max(axis=1)
-        atr_v    = tr.ewm(span=period, adjust=False).mean()
-        plus_di  = 100 * (plus_dm.ewm(span=period, adjust=False).mean() / atr_v)
-        minus_di = 100 * (minus_dm.ewm(span=period, adjust=False).mean() / atr_v)
-        dx       = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan))
-        adx_v    = dx.ewm(span=period, adjust=False).mean()
-        return adx_v, plus_di, minus_di
-
-    @staticmethod
-    def volume_ratio(df: pd.DataFrame, period=20) -> pd.Series:
-        if "Volume" not in df.columns or (df["Volume"] == 0).all():
+    def volratio(df: pd.DataFrame, n=20) -> pd.Series:
+        if "Volume" not in df or (df["Volume"] == 0).all():
             return pd.Series(1.0, index=df.index)
-        vol_sma = df["Volume"].rolling(period).mean()
-        return df["Volume"] / vol_sma.replace(0, np.nan)
+        return df["Volume"] / df["Volume"].rolling(n).mean().replace(0, np.nan)
 
     @classmethod
-    def add_all(cls, df: pd.DataFrame, cfg: GoldenConfig) -> pd.DataFrame:
-        df = df.copy()
-        c  = df["Close"]
-
-        df["ema_fast"]  = cls.ema(c, cfg.ema_fast)
-        df["ema_slow"]  = cls.ema(c, cfg.ema_slow)
-        df["ema_50"]    = cls.ema(c, cfg.ema_50)
-        df["ema_200"]   = cls.ema(c, cfg.ema_200)
-
-        df["rsi"] = cls.rsi(c, cfg.rsi_period)
-
-        df["macd"], df["macd_signal"], df["macd_hist"] = cls.macd(
-            c, cfg.macd_fast, cfg.macd_slow, cfg.macd_signal)
-
-        df["bb_upper"], df["bb_mid"], df["bb_lower"] = cls.bollinger_bands(
-            c, cfg.bb_period, cfg.bb_std)
-        df["bb_width"]    = (df["bb_upper"] - df["bb_lower"]) / df["bb_mid"]
-        df["bb_position"] = (c - df["bb_lower"]) / (df["bb_upper"] - df["bb_lower"]).replace(0, np.nan)
-
-        df["stoch_k"], df["stoch_d"] = cls.stochastic(
-            df, cfg.stoch_k, cfg.stoch_d, cfg.stoch_smooth)
-
-        df["atr"]  = cls.atr(df, cfg.atr_period)
-        df["adx"], df["plus_di"], df["minus_di"] = cls.adx(df, cfg.atr_period)
-        df["volume_ratio"] = cls.volume_ratio(df, cfg.volume_ma)
-
-        df["candle_body"]  = (df["Close"] - df["Open"]).abs()
-        df["candle_range"] = df["High"] - df["Low"]
-        df["upper_shadow"] = df["High"] - df[["Open", "Close"]].max(axis=1)
-        df["lower_shadow"] = df[["Open", "Close"]].min(axis=1) - df["Low"]
-        df["body_ratio"]   = df["candle_body"] / df["candle_range"].replace(0, np.nan)
-        df["is_bullish"]   = (df["Close"] > df["Open"]).astype(int)
-
-        df["price_change"]   = c.pct_change()
-        df["price_change_5"] = c.pct_change(5)
-        df["volatility"]     = df["price_change"].rolling(20).std()
-
+    def compute(cls, df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+        df  = df.copy()
+        c   = df["Close"]
+        df["e_fast"] = cls.ema(c, cfg.ema_fast)
+        df["e_slow"] = cls.ema(c, cfg.ema_slow)
+        df["e50"]    = cls.ema(c, cfg.ema_50)
+        df["e200"]   = cls.ema(c, cfg.ema_200)
+        df["rsi"]    = cls.rsi(c, cfg.rsi_period)
+        df["macd"], df["macd_s"], df["macd_h"] = cls.macd(c, cfg.macd_fast, cfg.macd_slow, cfg.macd_sig)
+        df["bb_u"], df["bb_m"], df["bb_l"]     = cls.bb(c, cfg.bb_period, cfg.bb_std)
+        df["bb_w"]   = (df["bb_u"] - df["bb_l"]) / df["bb_m"]
+        df["bb_pos"] = (c - df["bb_l"]) / (df["bb_u"] - df["bb_l"]).replace(0, np.nan)
+        df["sk"], df["sd"] = cls.stoch(df, cfg.stoch_k, cfg.stoch_d, cfg.stoch_smooth)
+        df["atr"]    = cls.atr(df, cfg.atr_period)
+        df["adx"], df["pdi"], df["ndi"] = cls.adx(df, cfg.atr_period)
+        df["vr"]     = cls.volratio(df, cfg.vol_period)
+        df["body"]   = (df["Close"] - df["Open"]).abs()
+        df["rng"]    = df["High"] - df["Low"]
+        df["ush"]    = df["High"] - df[["Open","Close"]].max(axis=1)
+        df["lsh"]    = df[["Open","Close"]].min(axis=1) - df["Low"]
+        df["brat"]   = df["body"] / df["rng"].replace(0, np.nan)
+        df["bull"]   = (df["Close"] > df["Open"]).astype(int)
+        df["ret"]    = c.pct_change()
         df.dropna(inplace=True)
-        if df.empty:
-            log.debug("Indicators.add_all: DataFrame empty after dropna")
         return df
 
 
-# ---------------------------------------------------------------------------
-# PRICE ACTION ENGINE
-# ---------------------------------------------------------------------------
-
-class PriceAction:
-    """Detects candlestick patterns and key levels."""
+# ─────────────────────────────────────────────
+#  PRICE ACTION
+# ─────────────────────────────────────────────
+class PA:
 
     @staticmethod
-    def is_pin_bar(row: pd.Series, direction: str, pin_ratio: float = 0.6) -> bool:
-        """
-        Pin bar: long wick on one side, small body.
-        direction='bull' => long lower shadow, small upper shadow, close near high
-        direction='bear' => long upper shadow, small lower shadow, close near low
-        """
-        if row["candle_range"] == 0:
+    def pin(row, direction: str, ratio=0.6) -> bool:
+        if row["rng"] == 0:
             return False
-        body    = row["candle_body"]
-        c_range = row["candle_range"]
-        upper   = row["upper_shadow"]
-        lower   = row["lower_shadow"]
-
         if direction == "bull":
-            # Lower shadow at least pin_ratio of total range, body < 35% range
-            return (lower / c_range >= pin_ratio) and (body / c_range <= 0.35)
-        elif direction == "bear":
-            return (upper / c_range >= pin_ratio) and (body / c_range <= 0.35)
-        return False
+            return row["lsh"]/row["rng"] >= ratio and row["body"]/row["rng"] <= 0.35
+        return row["ush"]/row["rng"] >= ratio and row["body"]/row["rng"] <= 0.35
 
     @staticmethod
-    def is_engulfing(curr: pd.Series, prev: pd.Series, direction: str,
-                     ratio: float = 1.1) -> bool:
-        """
-        Engulfing candle: current body fully engulfs previous body.
-        direction='bull' => current green body > prev red body
-        direction='bear' => current red body > prev green body
-        """
-        if prev["candle_body"] == 0:
+    def engulf(cur, prev, direction: str, ratio=1.1) -> bool:
+        if prev["body"] == 0:
             return False
-        body_ratio = curr["candle_body"] / prev["candle_body"]
-
+        br = cur["body"] / prev["body"]
         if direction == "bull":
-            return (curr["is_bullish"] == 1 and
-                    prev["is_bullish"] == 0 and
-                    body_ratio >= ratio)
-        elif direction == "bear":
-            return (curr["is_bullish"] == 0 and
-                    prev["is_bullish"] == 1 and
-                    body_ratio >= ratio)
-        return False
+            return cur["bull"] == 1 and prev["bull"] == 0 and br >= ratio
+        return cur["bull"] == 0 and prev["bull"] == 1 and br >= ratio
 
     @staticmethod
-    def is_doji(row: pd.Series, max_body_pct: float = 0.1) -> bool:
-        if row["candle_range"] == 0:
-            return False
-        return row["candle_body"] / row["candle_range"] <= max_body_pct
+    def doji(row, max_pct=0.1) -> bool:
+        return row["rng"] > 0 and row["body"]/row["rng"] <= max_pct
 
     @staticmethod
-    def find_sr_levels(df: pd.DataFrame, lookback: int = 50,
-                       tolerance_pct: float = 0.003) -> Tuple[List[float], List[float]]:
-        """
-        Find Support and Resistance levels from swing highs/lows.
-        Returns (support_levels, resistance_levels).
-        """
-        highs = df["High"].values[-lookback:]
-        lows  = df["Low"].values[-lookback:]
-
-        resistances = []
-        supports    = []
-
-        for i in range(2, len(highs) - 2):
-            if (highs[i] > highs[i-1] and highs[i] > highs[i-2] and
-                    highs[i] > highs[i+1] and highs[i] > highs[i+2]):
-                resistances.append(highs[i])
-
-        for i in range(2, len(lows) - 2):
-            if (lows[i] < lows[i-1] and lows[i] < lows[i-2] and
-                    lows[i] < lows[i+1] and lows[i] < lows[i+2]):
-                supports.append(lows[i])
-
-        # Cluster nearby levels
-        def cluster(levels):
-            if not levels:
-                return []
-            levels = sorted(levels)
-            clustered = [levels[0]]
-            for lvl in levels[1:]:
-                if abs(lvl - clustered[-1]) / clustered[-1] > tolerance_pct:
-                    clustered.append(lvl)
+    def sr_levels(df: pd.DataFrame, lb=50, tol=0.003):
+        hi = df["High"].values[-lb:]
+        lo = df["Low"].values[-lb:]
+        res, sup = [], []
+        for i in range(2, len(hi)-2):
+            if hi[i] == max(hi[i-2:i+3]):
+                res.append(hi[i])
+            if lo[i] == min(lo[i-2:i+3]):
+                sup.append(lo[i])
+        def cluster(lvls):
+            if not lvls: return []
+            lvls = sorted(lvls)
+            out  = [lvls[0]]
+            for v in lvls[1:]:
+                if abs(v - out[-1]) / out[-1] > tol:
+                    out.append(v)
                 else:
-                    clustered[-1] = (clustered[-1] + lvl) / 2
-            return clustered
-
-        return cluster(supports), cluster(resistances)
-
-    @staticmethod
-    def near_level(price: float, levels: List[float],
-                   tolerance_pct: float = 0.003) -> bool:
-        """Check if price is within tolerance of any S/R level."""
-        for lvl in levels:
-            if abs(price - lvl) / lvl <= tolerance_pct:
-                return True
-        return False
-
-
-# ---------------------------------------------------------------------------
-# MACD DIVERGENCE ENGINE
-# ---------------------------------------------------------------------------
-
-class DivergenceEngine:
-    """
-    Detects Regular and Hidden MACD divergence.
-
-    Regular Bullish Divergence:
-      Price: Lower Low  |  MACD Histogram: Higher Low  => Buy signal
-    Regular Bearish Divergence:
-      Price: Higher High |  MACD Histogram: Lower High  => Sell signal
-    Hidden Bullish Divergence:
-      Price: Higher Low  |  MACD Histogram: Lower Low   => Trend continuation Buy
-    Hidden Bearish Divergence:
-      Price: Lower High  |  MACD Histogram: Higher High => Trend continuation Sell
-    """
+                    out[-1] = (out[-1] + v) / 2
+            return out
+        return cluster(sup), cluster(res)
 
     @staticmethod
-    def find_pivots(series: pd.Series, left: int = 5,
-                    right: int = 5) -> Tuple[List[int], List[int]]:
-        """Find pivot highs and lows in a series."""
-        pivot_highs = []
-        pivot_lows  = []
-        values = series.values
+    def near(price, levels, tol=0.003) -> bool:
+        return any(abs(price - l)/l <= tol for l in levels)
 
-        for i in range(left, len(values) - right):
-            window = values[i - left: i + right + 1]
-            if values[i] == max(window):
-                pivot_highs.append(i)
-            if values[i] == min(window):
-                pivot_lows.append(i)
 
-        return pivot_highs, pivot_lows
+# ─────────────────────────────────────────────
+#  DIVERGENCE ENGINE
+# ─────────────────────────────────────────────
+class Div:
+
+    @staticmethod
+    def pivots(s: pd.Series, left=5, right=5):
+        v  = s.values
+        ph, pl = [], []
+        for i in range(left, len(v)-right):
+            w = v[i-left:i+right+1]
+            if v[i] == max(w): ph.append(i)
+            if v[i] == min(w): pl.append(i)
+        return ph, pl
 
     @classmethod
-    def detect(cls, df: pd.DataFrame,
-               lookback: int = 40) -> Dict[str, Any]:
-        """
-        Detect divergence in the last `lookback` bars.
-        Returns a dict with divergence types found.
-        """
-        result = {
-            "regular_bull": False,
-            "regular_bear": False,
-            "hidden_bull":  False,
-            "hidden_bear":  False,
-            "strength":     0.0,   # 0.0 to 1.0
-        }
-
-        if len(df) < lookback + 10:
-            return result
-
-        window = df.tail(lookback).copy()
-        price  = window["Close"]
-        hist   = window["macd_hist"]
-
-        ph_price, pl_price = cls.find_pivots(price, left=3, right=3)
-        ph_hist,  pl_hist  = cls.find_pivots(hist, left=3, right=3)
-
-        # Need at least 2 pivot highs and 2 pivot lows
-        if len(ph_price) >= 2 and len(ph_hist) >= 2:
-            # Regular Bearish: price HH, macd LH
-            pp1, pp2 = ph_price[-2], ph_price[-1]
-            hp1, hp2 = ph_hist[-2],  ph_hist[-1]
-            if (price.iloc[pp2] > price.iloc[pp1] and
-                    hist.iloc[hp2] < hist.iloc[hp1] and
-                    hist.iloc[hp2] < 0):
-                result["regular_bear"] = True
-                gap = abs(hist.iloc[hp1] - hist.iloc[hp2])
-                result["strength"] = max(result["strength"], min(gap * 500, 1.0))
-
-            # Hidden Bearish: price LH, macd HH
-            if (price.iloc[pp2] < price.iloc[pp1] and
-                    hist.iloc[hp2] > hist.iloc[hp1]):
-                result["hidden_bear"] = True
-
-        if len(pl_price) >= 2 and len(pl_hist) >= 2:
-            # Regular Bullish: price LL, macd HL
-            pp1, pp2 = pl_price[-2], pl_price[-1]
-            lp1, lp2 = pl_hist[-2],  pl_hist[-1]
-            if (price.iloc[pp2] < price.iloc[pp1] and
-                    hist.iloc[lp2] > hist.iloc[lp1] and
-                    hist.iloc[lp2] < 0):
-                result["regular_bull"] = True
-                gap = abs(hist.iloc[lp1] - hist.iloc[lp2])
-                result["strength"] = max(result["strength"], min(gap * 500, 1.0))
-
-            # Hidden Bullish: price HL, macd LL
-            if (price.iloc[pp2] > price.iloc[pp1] and
-                    hist.iloc[lp2] < hist.iloc[lp1]):
-                result["hidden_bull"] = True
-
-        return result
+    def detect(cls, df: pd.DataFrame, lb=40) -> dict:
+        res = {"rb": False, "bb_div": False, "hb": False, "hb_bear": False, "strength": 0.0}
+        if len(df) < lb+10:
+            return res
+        w = df.tail(lb)
+        p, h = w["Close"], w["macd_h"]
+        pph, ppl = cls.pivots(p)
+        hph, hpl = cls.pivots(h)
+        if len(pph) >= 2 and len(hph) >= 2:
+            pp1, pp2 = pph[-2], pph[-1]
+            hp1, hp2 = hph[-2], hph[-1]
+            if p.iloc[pp2] > p.iloc[pp1] and h.iloc[hp2] < h.iloc[hp1] and h.iloc[hp2] < 0:
+                res["bb_div"] = True
+                res["strength"] = max(res["strength"], min(abs(h.iloc[hp1]-h.iloc[hp2])*500, 1.0))
+            if p.iloc[pp2] < p.iloc[pp1] and h.iloc[hp2] > h.iloc[hp1]:
+                res["hb_bear"] = True
+        if len(ppl) >= 2 and len(hpl) >= 2:
+            pp1, pp2 = ppl[-2], ppl[-1]
+            lp1, lp2 = hpl[-2], hpl[-1]
+            if p.iloc[pp2] < p.iloc[pp1] and h.iloc[lp2] > h.iloc[lp1] and h.iloc[lp2] < 0:
+                res["rb"] = True
+                res["strength"] = max(res["strength"], min(abs(h.iloc[lp1]-h.iloc[lp2])*500, 1.0))
+            if p.iloc[pp2] > p.iloc[pp1] and h.iloc[lp2] < h.iloc[lp1]:
+                res["hb"] = True
+        return res
 
 
-# ---------------------------------------------------------------------------
-# STRATEGY 1: TREND-MOMENTUM (Golden Cross + RSI Pullback)
-# ---------------------------------------------------------------------------
-
-class Strategy1_GoldenCross:
-    """
-    Golden Cross / Death Cross trend-momentum strategy.
-
-    Buy setup:
-      1. 50 EMA > 200 EMA (Golden Cross context)
-      2. Price > 50 EMA (above trend)
-      3. Fast EMA > Slow EMA (short-term momentum up)
-      4. RSI pulled back to 40-55 (healthy pullback, not overbought)
-      5. RSI now rising (momentum returning)
-      6. Volume >= average (participation)
-      7. ADX > 20 (trending, not ranging)
-
-    Sell setup: Mirror image.
-    """
-
+# ─────────────────────────────────────────────
+#  STRATEGY 1 — EMA Cross + RSI Pullback
+# ─────────────────────────────────────────────
+class S1:
     @staticmethod
-    def score(df: pd.DataFrame, cfg: GoldenConfig,
-              direction: str) -> Tuple[float, List[str]]:
-        if len(df) < 3:
-            return 0.0, []
+    def score(df: pd.DataFrame, cfg: Config, d: str) -> Tuple[float, List[str]]:
+        if len(df) < 3: return 0.0, []
+        cur, prev, prev2 = df.iloc[-1], df.iloc[-2], df.iloc[-3]
+        s, r = 0.0, []
 
-        cur  = df.iloc[-1]
-        prev = df.iloc[-2]
-        prev2 = df.iloc[-3]
-        reasons = []
-        score   = 0.0
-
-        ema_50  = cur["ema_50"]
-        ema_200 = cur["ema_200"]
-        ema_f   = cur["ema_fast"]
-        ema_s   = cur["ema_slow"]
-        rsi     = cur["rsi"]
-        rsi_p   = prev["rsi"]
-        rsi_p2  = prev2["rsi"]
-        adx     = cur["adx"]
-        close   = cur["Close"]
-        vol     = cur["volume_ratio"]
-
-        if direction == "BUY":
-            # [2 pts] Golden Cross: 50 > 200
-            if ema_50 > ema_200:
-                score += 2.0
-                reasons.append(f"✅ Golden Cross (EMA50 > EMA200)")
-            elif ema_50 > ema_200 * 0.999:
-                score += 0.5
-                reasons.append(f"⚠️ EMA50 near EMA200 (forming cross)")
-
-            # [1.5 pts] Price above 50 EMA
-            if close > ema_50:
-                score += 1.5
-                reasons.append(f"✅ Price above EMA50")
-
-            # [1 pt] Fast > Slow EMA (short-term up)
-            if ema_f > ema_s:
-                score += 1.0
-                reasons.append(f"✅ EMA{cfg.ema_fast} > EMA{cfg.ema_slow}")
-
-            # [2 pts] RSI pullback: was in 40-55, now rising
-            rsi_pulled_back = cfg.rsi_pullback_min <= rsi <= cfg.rsi_pullback_max
-            rsi_was_lower   = rsi_p <= rsi and rsi_p2 <= rsi_p + 2
-            if rsi_pulled_back and rsi_was_lower:
-                score += 2.0
-                reasons.append(f"✅ RSI pullback to {rsi:.1f} and rising (momentum reset)")
-            elif cfg.rsi_pullback_min <= rsi <= 60:
-                score += 1.0
-                reasons.append(f"⚠️ RSI at {rsi:.1f} (borderline zone)")
-
-            # [2 pts] Not overbought
-            if rsi < cfg.rsi_overbought:
-                score += 1.0
-                reasons.append(f"✅ RSI {rsi:.1f} not overbought")
-
-            # [1 pt] ADX > 20 (trending)
-            if adx > 25:
-                score += 1.0
-                reasons.append(f"✅ ADX={adx:.1f} (strong trend)")
-            elif adx > 20:
-                score += 0.5
-                reasons.append(f"⚠️ ADX={adx:.1f} (moderate trend)")
-
-            # [0.5 pt] Volume confirmation
-            if vol >= cfg.volume_min:
-                score += 0.5
-                reasons.append(f"✅ Volume ratio={vol:.2f}x")
-
-        elif direction == "SELL":
-            # [2 pts] Death Cross: 50 < 200
-            if ema_50 < ema_200:
-                score += 2.0
-                reasons.append(f"✅ Death Cross (EMA50 < EMA200)")
-            elif ema_50 < ema_200 * 1.001:
-                score += 0.5
-                reasons.append(f"⚠️ EMA50 near EMA200 (forming death cross)")
-
-            # [1.5 pts] Price below 50 EMA
-            if close < ema_50:
-                score += 1.5
-                reasons.append(f"✅ Price below EMA50")
-
-            # [1 pt] Fast < Slow EMA
-            if ema_f < ema_s:
-                score += 1.0
-                reasons.append(f"✅ EMA{cfg.ema_fast} < EMA{cfg.ema_slow}")
-
-            # [2 pts] RSI pullback bounce from 45-60 area, now falling
-            rsi_pb = cfg.rsi_sell_min if hasattr(cfg, "rsi_sell_min") else 45
-            rsi_pulled_back = 45.0 <= rsi <= 60.0
-            rsi_falling     = rsi_p >= rsi and rsi_p2 >= rsi_p - 2
-            if rsi_pulled_back and rsi_falling:
-                score += 2.0
-                reasons.append(f"✅ RSI bounce-down at {rsi:.1f} (dead cat)")
-            elif 35 <= rsi <= 60:
-                score += 1.0
-                reasons.append(f"⚠️ RSI {rsi:.1f} in sell zone")
-
-            # Not oversold
-            if rsi > cfg.rsi_oversold:
-                score += 1.0
-                reasons.append(f"✅ RSI {rsi:.1f} not oversold")
-
-            # ADX
-            if adx > 25:
-                score += 1.0
-                reasons.append(f"✅ ADX={adx:.1f} (strong downtrend)")
-            elif adx > 20:
-                score += 0.5
-
-            # Volume
-            if vol >= cfg.volume_min:
-                score += 0.5
-                reasons.append(f"✅ Volume={vol:.2f}x average")
-
-        # Normalize to 0-10
-        score = min(score, 10.0)
-        return score, reasons
-
-
-# ---------------------------------------------------------------------------
-# STRATEGY 2: MEAN REVERSION (Bollinger + Stochastic)
-# ---------------------------------------------------------------------------
-
-class Strategy2_MeanReversion:
-    """
-    Mean Reversion: Price at extreme Bollinger Band + Stochastic reversal.
-
-    Long setup:
-      1. Price touches or breaks lower Bollinger Band
-      2. Stochastic K < 20 (oversold)
-      3. Stochastic K crossing above D (reversal signal)
-      4. RSI < 35 (confirms oversold)
-      5. Bullish candle pattern at the band (pin bar / engulfing)
-      6. BB Width expanding (volatility = energy for bounce)
-      7. Target: middle BB (mean)
-
-    Short setup: Mirror image at upper band.
-    """
-
-    @staticmethod
-    def score(df: pd.DataFrame, cfg: GoldenConfig,
-              direction: str) -> Tuple[float, List[str]]:
-        if len(df) < 3:
-            return 0.0, []
-
-        cur  = df.iloc[-1]
-        prev = df.iloc[-2]
-        reasons = []
-        score   = 0.0
-
-        close    = cur["Close"]
-        bb_upper = cur["bb_upper"]
-        bb_lower = cur["bb_lower"]
-        bb_mid   = cur["bb_mid"]
-        bb_pos   = cur.get("bb_position", 0.5)
-        bb_width = cur["bb_width"]
-        stoch_k  = cur["stoch_k"]
-        stoch_d  = cur["stoch_d"]
-        stoch_k_prev = prev["stoch_k"]
-        stoch_d_prev = prev["stoch_d"]
-        rsi      = cur["rsi"]
-        vol      = cur["volume_ratio"]
-
-        # Price distance to bands
-        lower_dist = abs(close - bb_lower) / bb_lower
-        upper_dist = abs(close - bb_upper) / bb_upper
-
-        if direction == "BUY":
-            # [2.5 pts] Price at or below lower BB
-            if close <= bb_lower:
-                score += 2.5
-                reasons.append(f"✅ Price BELOW lower BB (mean reversion entry)")
-            elif lower_dist <= cfg.bb_touch_pct:
-                score += 2.0
-                reasons.append(f"✅ Price touching lower BB ({lower_dist*100:.2f}% away)")
-            elif lower_dist <= cfg.bb_touch_pct * 2:
-                score += 1.0
-                reasons.append(f"⚠️ Price near lower BB")
-
-            # [2.5 pts] Stochastic oversold + crossing up
-            stoch_cross_up = (stoch_k_prev <= stoch_d_prev) and (stoch_k > stoch_d)
-            if stoch_k < cfg.stoch_oversold and stoch_cross_up:
-                score += 2.5
-                reasons.append(f"✅ Stoch K={stoch_k:.1f} oversold + crossing UP ↑")
-            elif stoch_k < cfg.stoch_oversold:
-                score += 1.5
-                reasons.append(f"✅ Stoch K={stoch_k:.1f} oversold")
-            elif stoch_k < 30 and stoch_cross_up:
-                score += 1.0
-                reasons.append(f"⚠️ Stoch crossing up at {stoch_k:.1f}")
-
-            # [1.5 pts] RSI oversold
-            if rsi < 35:
-                score += 1.5
-                reasons.append(f"✅ RSI={rsi:.1f} oversold (<35)")
-            elif rsi < 40:
-                score += 0.75
-                reasons.append(f"⚠️ RSI={rsi:.1f} near oversold")
-
-            # [2 pts] Bullish candle pattern
-            pin = PriceAction.is_pin_bar(cur, "bull", cfg.pin_bar_ratio)
-            eng = PriceAction.is_engulfing(cur, prev, "bull", cfg.engulfing_ratio)
-            if pin:
-                score += 2.0
-                reasons.append(f"✅ Pin bar (bullish reversal candle)")
-            elif eng:
-                score += 2.0
-                reasons.append(f"✅ Bullish engulfing candle")
-            elif cur["is_bullish"] == 1 and cur["body_ratio"] > 0.5:
-                score += 0.5
-                reasons.append(f"⚠️ Bullish close")
-
-            # [0.5 pts] BB width (volatility expanding = room to bounce)
-            if bb_width > df["bb_width"].rolling(20).mean().iloc[-1]:
-                score += 0.5
-                reasons.append(f"✅ BB widening (volatility expanding)")
-
-        elif direction == "SELL":
-            # [2.5 pts] Price at or above upper BB
-            if close >= bb_upper:
-                score += 2.5
-                reasons.append(f"✅ Price ABOVE upper BB (mean reversion short)")
-            elif upper_dist <= cfg.bb_touch_pct:
-                score += 2.0
-                reasons.append(f"✅ Price touching upper BB ({upper_dist*100:.2f}% away)")
-            elif upper_dist <= cfg.bb_touch_pct * 2:
-                score += 1.0
-                reasons.append(f"⚠️ Price near upper BB")
-
-            # [2.5 pts] Stochastic overbought + crossing down
-            stoch_cross_dn = (stoch_k_prev >= stoch_d_prev) and (stoch_k < stoch_d)
-            if stoch_k > cfg.stoch_overbought and stoch_cross_dn:
-                score += 2.5
-                reasons.append(f"✅ Stoch K={stoch_k:.1f} overbought + crossing DOWN ↓")
-            elif stoch_k > cfg.stoch_overbought:
-                score += 1.5
-                reasons.append(f"✅ Stoch K={stoch_k:.1f} overbought")
-            elif stoch_k > 70 and stoch_cross_dn:
-                score += 1.0
-                reasons.append(f"⚠️ Stoch crossing down at {stoch_k:.1f}")
-
-            # [1.5 pts] RSI overbought
-            if rsi > 65:
-                score += 1.5
-                reasons.append(f"✅ RSI={rsi:.1f} overbought (>65)")
-            elif rsi > 60:
-                score += 0.75
-                reasons.append(f"⚠️ RSI={rsi:.1f} elevated")
-
-            # [2 pts] Bearish candle pattern
-            pin = PriceAction.is_pin_bar(cur, "bear", cfg.pin_bar_ratio)
-            eng = PriceAction.is_engulfing(cur, prev, "bear", cfg.engulfing_ratio)
-            if pin:
-                score += 2.0
-                reasons.append(f"✅ Bearish pin bar (rejection candle)")
-            elif eng:
-                score += 2.0
-                reasons.append(f"✅ Bearish engulfing candle")
-            elif cur["is_bullish"] == 0 and cur["body_ratio"] > 0.5:
-                score += 0.5
-                reasons.append(f"⚠️ Bearish close")
-
-            # BB width
-            if bb_width > df["bb_width"].rolling(20).mean().iloc[-1]:
-                score += 0.5
-                reasons.append(f"✅ BB widening")
-
-        score = min(score, 10.0)
-        return score, reasons
-
-
-# ---------------------------------------------------------------------------
-# STRATEGY 3: MACD DIVERGENCE + PRICE ACTION CONFLUENCE
-# ---------------------------------------------------------------------------
-
-class Strategy3_Divergence:
-    """
-    MACD Divergence at key S/R level + Price Action candle confirmation.
-
-    The Setup:
-      1. Identify clear S/R level from swing highs/lows
-      2. Price approaches that level
-      3. MACD divergence present (regular or hidden)
-      4. Pin bar or engulfing candle at the level
-      5. Volume confirmation on the signal candle
-      6. MACD histogram changing direction (zero-line proximity)
-
-    This strategy mirrors the setup in your uploaded image perfectly:
-    price making new high/low while MACD makes lower high/higher low.
-    """
-
-    @staticmethod
-    def score(df: pd.DataFrame, cfg: GoldenConfig,
-              direction: str) -> Tuple[float, List[str]]:
-        if len(df) < 40:
-            return 0.0, []
-
-        cur  = df.iloc[-1]
-        prev = df.iloc[-2]
-        reasons = []
-        score   = 0.0
-
-        close  = cur["Close"]
-        vol    = cur["volume_ratio"]
-
-        # Find S/R levels
-        supports, resistances = PriceAction.find_sr_levels(
-            df, cfg.sr_lookback, cfg.sr_tolerance_pct)
-
-        # Detect divergence
-        div = DivergenceEngine.detect(df, cfg.divergence_lookback)
-
-        macd_h    = cur["macd_hist"]
-        macd_h_p  = prev["macd_hist"]
-        macd_line = cur["macd"]
+        e50, e200 = cur["e50"], cur["e200"]
+        ef, es    = cur["e_fast"], cur["e_slow"]
         rsi       = cur["rsi"]
+        rp, rp2   = prev["rsi"], prev2["rsi"]
         adx       = cur["adx"]
+        cl        = cur["Close"]
+        vr        = cur["vr"]
 
-        if direction == "BUY":
-            # [3 pts] Regular bullish divergence
-            if div["regular_bull"]:
-                strength_bonus = div["strength"] * 1.0
-                score += 3.0 + strength_bonus
-                reasons.append(f"✅ REGULAR BULLISH DIVERGENCE (price LL, MACD HL) — strength={div['strength']:.2f}")
+        if d == "BUY":
+            if e50 > e200:
+                s += 2.0; r.append("Golden Cross: EMA50 > EMA200")
+            elif e50 > e200 * 0.999:
+                s += 0.5; r.append("EMA50 near EMA200 (forming)")
+            if cl > e50:    s += 1.5; r.append("Price above EMA50")
+            if ef > es:     s += 1.0; r.append(f"EMA{cfg.ema_fast} > EMA{cfg.ema_slow}")
+            if cfg.rsi_bull_lo <= rsi <= cfg.rsi_bull_hi and rp <= rsi:
+                s += 2.0; r.append(f"RSI pullback {rsi:.0f} → rising (momentum reset)")
+            elif cfg.rsi_bull_lo <= rsi <= 60:
+                s += 1.0; r.append(f"RSI {rsi:.0f} in bullish zone")
+            if rsi < cfg.rsi_ob:    s += 1.0; r.append(f"RSI {rsi:.0f} not overbought")
+            if adx > 25:            s += 1.0; r.append(f"ADX {adx:.0f} strong trend")
+            elif adx > 20:          s += 0.5; r.append(f"ADX {adx:.0f} moderate trend")
+            if vr >= cfg.vol_min:   s += 0.5; r.append(f"Volume {vr:.1f}x average")
+        else:
+            if e50 < e200:
+                s += 2.0; r.append("Death Cross: EMA50 < EMA200")
+            elif e50 < e200 * 1.001:
+                s += 0.5; r.append("EMA50 near EMA200 (death forming)")
+            if cl < e50:    s += 1.5; r.append("Price below EMA50")
+            if ef < es:     s += 1.0; r.append(f"EMA{cfg.ema_fast} < EMA{cfg.ema_slow}")
+            if 45.0 <= rsi <= 60.0 and rp >= rsi:
+                s += 2.0; r.append(f"RSI {rsi:.0f} dead-cat bounce → falling")
+            elif 35 <= rsi <= 60:
+                s += 1.0; r.append(f"RSI {rsi:.0f} in sell zone")
+            if rsi > cfg.rsi_os:    s += 1.0; r.append(f"RSI {rsi:.0f} not oversold")
+            if adx > 25:            s += 1.0; r.append(f"ADX {adx:.0f} strong downtrend")
+            elif adx > 20:          s += 0.5
+            if vr >= cfg.vol_min:   s += 0.5; r.append(f"Volume {vr:.1f}x average")
 
-            # [1.5 pts] Hidden bullish divergence (trend continuation)
-            elif div["hidden_bull"]:
-                score += 1.5
-                reasons.append(f"✅ Hidden bullish divergence (trend continuation)")
-
-            # [2 pts] Price at support level
-            near_sup = PriceAction.near_level(close, supports, cfg.sr_tolerance_pct)
-            if near_sup:
-                score += 2.0
-                nearest = min(supports, key=lambda x: abs(x - close)) if supports else close
-                reasons.append(f"✅ Price at support level ({nearest:.5f})")
-
-            # [2 pts] Bullish price action candle
-            pin = PriceAction.is_pin_bar(cur, "bull", cfg.pin_bar_ratio)
-            eng = PriceAction.is_engulfing(cur, prev, "bull", cfg.engulfing_ratio)
-            if pin:
-                score += 2.0
-                reasons.append(f"✅ Bullish pin bar at support")
-            elif eng:
-                score += 2.0
-                reasons.append(f"✅ Bullish engulfing at support")
-            elif PriceAction.is_doji(cur):
-                score += 0.75
-                reasons.append(f"⚠️ Doji (indecision)")
-
-            # [1 pt] MACD histogram turning from negative
-            if macd_h > macd_h_p and macd_h_p < 0:
-                score += 1.0
-                reasons.append(f"✅ MACD histogram turning UP (momentum shift)")
-
-            # [0.5 pt] Volume spike on signal bar
-            if vol >= 1.5:
-                score += 0.5
-                reasons.append(f"✅ Volume spike = {vol:.2f}x (conviction)")
-            elif vol >= cfg.volume_min:
-                score += 0.25
-
-            # RSI not overbought
-            if rsi < 60:
-                score += 0.5
-                reasons.append(f"✅ RSI={rsi:.1f} has room to run")
-
-        elif direction == "SELL":
-            # [3 pts] Regular bearish divergence
-            if div["regular_bear"]:
-                strength_bonus = div["strength"] * 1.0
-                score += 3.0 + strength_bonus
-                reasons.append(f"✅ REGULAR BEARISH DIVERGENCE (price HH, MACD LH) — strength={div['strength']:.2f}")
-
-            # [1.5 pts] Hidden bearish divergence
-            elif div["hidden_bear"]:
-                score += 1.5
-                reasons.append(f"✅ Hidden bearish divergence (trend continuation)")
-
-            # [2 pts] Price at resistance level
-            near_res = PriceAction.near_level(close, resistances, cfg.sr_tolerance_pct)
-            if near_res:
-                score += 2.0
-                nearest = min(resistances, key=lambda x: abs(x - close)) if resistances else close
-                reasons.append(f"✅ Price at resistance level ({nearest:.5f})")
-
-            # [2 pts] Bearish price action candle
-            pin = PriceAction.is_pin_bar(cur, "bear", cfg.pin_bar_ratio)
-            eng = PriceAction.is_engulfing(cur, prev, "bear", cfg.engulfing_ratio)
-            if pin:
-                score += 2.0
-                reasons.append(f"✅ Bearish pin bar at resistance")
-            elif eng:
-                score += 2.0
-                reasons.append(f"✅ Bearish engulfing at resistance")
-            elif PriceAction.is_doji(cur):
-                score += 0.75
-                reasons.append(f"⚠️ Doji at resistance (indecision = potential reversal)")
-
-            # [1 pt] MACD histogram turning from positive
-            if macd_h < macd_h_p and macd_h_p > 0:
-                score += 1.0
-                reasons.append(f"✅ MACD histogram turning DOWN")
-
-            # Volume
-            if vol >= 1.5:
-                score += 0.5
-                reasons.append(f"✅ Volume spike = {vol:.2f}x")
-            elif vol >= cfg.volume_min:
-                score += 0.25
-
-            # RSI not oversold
-            if rsi > 40:
-                score += 0.5
-                reasons.append(f"✅ RSI={rsi:.1f} has room to fall")
-
-        score = min(score, 10.0)
-        return score, reasons
+        return min(s, 10.0), r
 
 
-# ---------------------------------------------------------------------------
-# DATA FETCHER
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────
+#  STRATEGY 2 — Bollinger + Stochastic
+# ─────────────────────────────────────────────
+class S2:
+    @staticmethod
+    def score(df: pd.DataFrame, cfg: Config, d: str) -> Tuple[float, List[str]]:
+        if len(df) < 3: return 0.0, []
+        cur, prev = df.iloc[-1], df.iloc[-2]
+        s, r = 0.0, []
 
-class DataFetcher:
-    YF_INTERVAL_MAP = {
-        "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-        "1h": "1h", "4h": "1h", "1d": "1d", "1wk": "1wk",
-    }
-    YF_PERIOD_MAP = {
-        "1m": "7d", "5m": "30d", "15m": "60d", "30m": "60d",
-        "1h": "90d", "4h": "180d", "1d": "2y", "1wk": "5y",
-    }
+        cl     = cur["Close"]
+        bbu    = cur["bb_u"]
+        bbl    = cur["bb_l"]
+        bbw    = cur["bb_w"]
+        sk     = cur["sk"]
+        sd     = cur["sd"]
+        skp    = prev["sk"]
+        sdp    = prev["sd"]
+        rsi    = cur["rsi"]
+        vr     = cur["vr"]
+        ld     = abs(cl - bbl) / bbl
+        ud     = abs(cl - bbu) / bbu
 
-    def __init__(self, cfg: GoldenConfig):
+        if d == "BUY":
+            if cl <= bbl:
+                s += 2.5; r.append("Price BELOW lower Bollinger Band")
+            elif ld <= cfg.bb_touch:
+                s += 2.0; r.append(f"Price touching lower BB ({ld*100:.2f}% away)")
+            elif ld <= cfg.bb_touch*2:
+                s += 1.0; r.append("Price near lower BB")
+            cross_up = skp <= sdp and sk > sd
+            if sk < cfg.stoch_os and cross_up:
+                s += 2.5; r.append(f"Stoch {sk:.0f} oversold + crossing UP")
+            elif sk < cfg.stoch_os:
+                s += 1.5; r.append(f"Stoch {sk:.0f} oversold")
+            elif sk < 30 and cross_up:
+                s += 1.0; r.append(f"Stoch crossing up at {sk:.0f}")
+            if rsi < 35:    s += 1.5; r.append(f"RSI {rsi:.0f} oversold")
+            elif rsi < 40:  s += 0.75; r.append(f"RSI {rsi:.0f} near oversold")
+            if PA.pin(cur, "bull", cfg.pin_ratio):
+                s += 2.0; r.append("Bullish pin bar at lower band")
+            elif PA.engulf(cur, prev, "bull", cfg.engulf_ratio):
+                s += 2.0; r.append("Bullish engulfing candle")
+            elif cur["bull"] == 1 and cur["brat"] > 0.5:
+                s += 0.5; r.append("Bullish close")
+            if bbw > df["bb_w"].rolling(20).mean().iloc[-1]:
+                s += 0.5; r.append("Bollinger Band widening")
+        else:
+            if cl >= bbu:
+                s += 2.5; r.append("Price ABOVE upper Bollinger Band")
+            elif ud <= cfg.bb_touch:
+                s += 2.0; r.append(f"Price touching upper BB ({ud*100:.2f}% away)")
+            elif ud <= cfg.bb_touch*2:
+                s += 1.0; r.append("Price near upper BB")
+            cross_dn = skp >= sdp and sk < sd
+            if sk > cfg.stoch_ob and cross_dn:
+                s += 2.5; r.append(f"Stoch {sk:.0f} overbought + crossing DOWN")
+            elif sk > cfg.stoch_ob:
+                s += 1.5; r.append(f"Stoch {sk:.0f} overbought")
+            elif sk > 70 and cross_dn:
+                s += 1.0; r.append(f"Stoch crossing down at {sk:.0f}")
+            if rsi > 65:    s += 1.5; r.append(f"RSI {rsi:.0f} overbought")
+            elif rsi > 60:  s += 0.75; r.append(f"RSI {rsi:.0f} elevated")
+            if PA.pin(cur, "bear", cfg.pin_ratio):
+                s += 2.0; r.append("Bearish pin bar at upper band")
+            elif PA.engulf(cur, prev, "bear", cfg.engulf_ratio):
+                s += 2.0; r.append("Bearish engulfing candle")
+            elif cur["bull"] == 0 and cur["brat"] > 0.5:
+                s += 0.5; r.append("Bearish close")
+            if bbw > df["bb_w"].rolling(20).mean().iloc[-1]:
+                s += 0.5; r.append("Bollinger Band widening")
+
+        return min(s, 10.0), r
+
+
+# ─────────────────────────────────────────────
+#  STRATEGY 3 — MACD Divergence + S/R
+# ─────────────────────────────────────────────
+class S3:
+    @staticmethod
+    def score(df: pd.DataFrame, cfg: Config, d: str) -> Tuple[float, List[str]]:
+        if len(df) < 40: return 0.0, []
+        cur, prev = df.iloc[-1], df.iloc[-2]
+        s, r = 0.0, []
+
+        cl  = cur["Close"]
+        vr  = cur["vr"]
+        mh  = cur["macd_h"]
+        mhp = prev["macd_h"]
+        rsi = cur["rsi"]
+
+        sup, res = PA.sr_levels(df, cfg.sr_lookback, cfg.sr_tol)
+        div      = Div.detect(df, cfg.div_lookback)
+
+        if d == "BUY":
+            if div["rb"]:
+                s += 3.0 + div["strength"]
+                r.append(f"REGULAR BULLISH DIVERGENCE (strength {div['strength']:.2f})")
+            elif div["hb"]:
+                s += 1.5; r.append("Hidden bullish divergence (trend continuation)")
+            if PA.near(cl, sup, cfg.sr_tol):
+                s += 2.0
+                nearest = min(sup, key=lambda x: abs(x-cl)) if sup else cl
+                r.append(f"Price at support {nearest:.5f}")
+            if PA.pin(cur, "bull", cfg.pin_ratio):
+                s += 2.0; r.append("Bullish pin bar at support")
+            elif PA.engulf(cur, prev, "bull", cfg.engulf_ratio):
+                s += 2.0; r.append("Bullish engulfing at support")
+            elif PA.doji(cur):
+                s += 0.75; r.append("Doji at support (indecision)")
+            if mh > mhp and mhp < 0:
+                s += 1.0; r.append("MACD histogram turning UP (momentum shift)")
+            if vr >= 1.5:
+                s += 0.5; r.append(f"Volume spike {vr:.1f}x")
+            elif vr >= cfg.vol_min:
+                s += 0.25
+            if rsi < 60: s += 0.5; r.append(f"RSI {rsi:.0f} has room to run")
+        else:
+            if div["bb_div"]:
+                s += 3.0 + div["strength"]
+                r.append(f"REGULAR BEARISH DIVERGENCE (strength {div['strength']:.2f})")
+            elif div["hb_bear"]:
+                s += 1.5; r.append("Hidden bearish divergence (trend continuation)")
+            if PA.near(cl, res, cfg.sr_tol):
+                s += 2.0
+                nearest = min(res, key=lambda x: abs(x-cl)) if res else cl
+                r.append(f"Price at resistance {nearest:.5f}")
+            if PA.pin(cur, "bear", cfg.pin_ratio):
+                s += 2.0; r.append("Bearish pin bar at resistance")
+            elif PA.engulf(cur, prev, "bear", cfg.engulf_ratio):
+                s += 2.0; r.append("Bearish engulfing at resistance")
+            elif PA.doji(cur):
+                s += 0.75; r.append("Doji at resistance (potential reversal)")
+            if mh < mhp and mhp > 0:
+                s += 1.0; r.append("MACD histogram turning DOWN")
+            if vr >= 1.5:
+                s += 0.5; r.append(f"Volume spike {vr:.1f}x")
+            elif vr >= cfg.vol_min:
+                s += 0.25
+            if rsi > 40: s += 0.5; r.append(f"RSI {rsi:.0f} has room to fall")
+
+        return min(s, 10.0), r
+
+
+# ─────────────────────────────────────────────
+#  DATA FETCHER
+# ─────────────────────────────────────────────
+class Fetcher:
+    YF_INTERVAL = {"1m":"1m","5m":"5m","15m":"15m","30m":"30m",
+                   "1h":"1h","4h":"1h","1d":"1d"}
+    YF_PERIOD   = {"1m":"7d","5m":"30d","15m":"60d","30m":"60d",
+                   "1h":"90d","4h":"180d","1d":"2y"}
+
+    def __init__(self, cfg: Config):
         self.cfg = cfg
 
-    def _yf_symbol(self, symbol: str) -> str:
-        if len(symbol) == 6 and symbol.isalpha():
-            return f"{symbol[:3]}{symbol[3:]}=X"
-        if symbol == "XAUUSD":
-            return "GC=F"
-        return symbol
+    def _yf_sym(self, sym: str) -> str:
+        if len(sym) == 6 and sym.isalpha():
+            return f"{sym[:3]}{sym[3:]}=X"
+        return {"XAUUSD":"GC=F"}.get(sym, sym)
 
-    def fetch_yf(self, symbol: str, timeframe: str) -> pd.DataFrame:
-        yf_sym   = self._yf_symbol(symbol)
-        interval = self.YF_INTERVAL_MAP.get(timeframe, "1h")
-        period   = self.YF_PERIOD_MAP.get(timeframe, "90d")
+    def yf(self, sym: str, tf: str) -> pd.DataFrame:
+        ysym = self._yf_sym(sym)
+        iv   = self.YF_INTERVAL.get(tf, "1h")
+        per  = self.YF_PERIOD.get(tf, "90d")
         try:
-            df = yf.download(yf_sym, period=period, interval=interval,
+            df = yf.download(ysym, period=per, interval=iv,
                              progress=False, auto_adjust=True)
-            if df.empty:
-                return pd.DataFrame()
+            if df.empty: return pd.DataFrame()
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-            required = ["Open", "High", "Low", "Close", "Volume"]
-            for col in required:
-                if col not in df.columns:
-                    return pd.DataFrame()
-            return df[required].dropna().copy()
+            cols = ["Open","High","Low","Close","Volume"]
+            for c in cols:
+                if c not in df.columns: return pd.DataFrame()
+            return df[cols].dropna().copy()
         except Exception as e:
-            log.error(f"YF error {yf_sym}: {e}")
+            log.error(f"YF error {ysym}: {e}")
             return pd.DataFrame()
 
-    def fetch_mt5(self, symbol: str, timeframe: str, count: int = 500) -> pd.DataFrame:
-        if not HAS_MT5:
-            raise RuntimeError("MT5 not installed")
-        TF_MAP = {
-            "1m": mt5.TIMEFRAME_M1, "5m": mt5.TIMEFRAME_M5,
-            "15m": mt5.TIMEFRAME_M15, "30m": mt5.TIMEFRAME_M30,
-            "1h": mt5.TIMEFRAME_H1, "4h": mt5.TIMEFRAME_H4,
-            "1d": mt5.TIMEFRAME_D1,
-        }
-        tf = TF_MAP.get(timeframe, mt5.TIMEFRAME_H1)
-        mt5_sym = symbol + self.cfg.mt5_symbol_suffix
-        rates = mt5.copy_rates_from_pos(mt5_sym, tf, 0, count)
-        if rates is None or len(rates) == 0:
-            return pd.DataFrame()
+    def mt5_fetch(self, sym: str, tf: str, count=500) -> pd.DataFrame:
+        if not HAS_MT5: raise RuntimeError("MT5 not installed")
+        TF = {"1m":mt5.TIMEFRAME_M1,"5m":mt5.TIMEFRAME_M5,
+              "15m":mt5.TIMEFRAME_M15,"30m":mt5.TIMEFRAME_M30,
+              "1h":mt5.TIMEFRAME_H1,"4h":mt5.TIMEFRAME_H4,"1d":mt5.TIMEFRAME_D1}
+        rates = mt5.copy_rates_from_pos(sym + self.cfg.mt5_suffix, TF.get(tf, mt5.TIMEFRAME_H1), 0, count)
+        if rates is None or len(rates) == 0: return pd.DataFrame()
         df = pd.DataFrame(rates)
         df["time"] = pd.to_datetime(df["time"], unit="s")
         df.set_index("time", inplace=True)
-        df.rename(columns={
-            "open": "Open", "high": "High", "low": "Low",
-            "close": "Close", "tick_volume": "Volume"
-        }, inplace=True)
-        return df[["Open", "High", "Low", "Close", "Volume"]].copy()
+        df.rename(columns={"open":"Open","high":"High","low":"Low",
+                            "close":"Close","tick_volume":"Volume"}, inplace=True)
+        return df[["Open","High","Low","Close","Volume"]].copy()
 
-    def fetch(self, symbol: str, timeframe: str, use_mt5: bool = False) -> pd.DataFrame:
+    def fetch(self, sym: str, tf: str, use_mt5=False) -> pd.DataFrame:
         if use_mt5 and HAS_MT5:
-            return self.fetch_mt5(symbol, timeframe)
-        return self.fetch_yf(symbol, timeframe)
+            return self.mt5_fetch(sym, tf)
+        return self.yf(sym, tf)
 
-    def get_spread_pips(self, symbol: str) -> float:
-        if not HAS_MT5:
-            return 1.0
-        mt5_sym = symbol + self.cfg.mt5_symbol_suffix
-        tick = mt5.symbol_info_tick(mt5_sym)
-        if tick is None:
-            return 99.0
-        info = mt5.symbol_info(mt5_sym)
-        pip  = 0.0001 if (info and info.digits == 5) else 0.01
+    def spread(self, sym: str) -> float:
+        if not HAS_MT5: return 1.0
+        tick = mt5.symbol_info_tick(sym + self.cfg.mt5_suffix)
+        if not tick: return 99.0
+        info = mt5.symbol_info(sym + self.cfg.mt5_suffix)
+        pip  = 0.0001 if (info and info.digits >= 4) else 0.01
         return (tick.ask - tick.bid) / pip
 
 
-# ---------------------------------------------------------------------------
-# ECONOMIC NEWS FILTER
-# ---------------------------------------------------------------------------
-
-class NewsFilter:
-    """
-    Fetches economic news from Finnhub (primary) or Forex Factory (fallback)
-    and implements local caching to prevent rate-limiting.
-    """
-    def __init__(self, cfg: GoldenConfig):
-        self.cfg = cfg
-        self.events = []
+# ─────────────────────────────────────────────
+#  NEWS FILTER
+# ─────────────────────────────────────────────
+class News:
+    def __init__(self, cfg: Config):
+        self.cfg        = cfg
+        self.events     = []
         self.last_fetch = None
-        self.cache_file = cfg.news_cache_file
-        self.tz_utc = pytz.utc if pytz else None
-        
-        self._load_cache()
-        
-        # Initial fetch if cache is old or empty
-        if not self.events or self._cache_is_stale():
-            self.fetch_news()
+        self._load()
+        if not self.events or self._stale():
+            self.refresh()
 
-    def _load_cache(self):
-        """Load events from local JSON cache."""
-        if os.path.exists(self.cache_file):
+    def _load(self):
+        if os.path.exists(self.cfg.news_cache):
             try:
-                with open(self.cache_file, 'r') as f:
-                    data = json.load(f)
-                    self.events = data.get("events", [])
-                    lf = data.get("last_fetch")
-                    if lf:
-                        self.last_fetch = datetime.fromisoformat(lf)
-                    log.info(f"NewsFilter: Loaded {len(self.events)} events from cache.")
-            except Exception as e:
-                log.error(f"NewsFilter: Cache load error: {e}")
+                data = json.load(open(self.cfg.news_cache))
+                self.events = data.get("events", [])
+                lf = data.get("last_fetch")
+                if lf: self.last_fetch = datetime.fromisoformat(lf)
+                log.info(f"News cache: {len(self.events)} events loaded")
+            except: pass
 
-    def _save_cache(self):
-        """Save current events and fetch timestamp to disk."""
+    def _save(self):
         try:
-            with open(self.cache_file, 'w') as f:
-                json.dump({
-                    "last_fetch": self.last_fetch.isoformat() if self.last_fetch else None,
-                    "events": self.events
-                }, f, indent=4)
-        except Exception as e:
-            log.error(f"NewsFilter: Cache save error: {e}")
+            json.dump({"last_fetch": self.last_fetch.isoformat() if self.last_fetch else None,
+                       "events": self.events},
+                      open(self.cfg.news_cache, "w"), indent=2)
+        except: pass
 
-    def _cache_is_stale(self) -> bool:
-        """Check if cache is more than 6 hours old."""
-        if not self.last_fetch:
-            return True
-        return (datetime.utcnow() - self.last_fetch).total_seconds() > 21600
+    def _stale(self) -> bool:
+        return not self.last_fetch or \
+               (datetime.utcnow() - self.last_fetch).total_seconds() > 21600
 
-    def fetch_news(self):
-        """Try fetching from Finnhub primarily, fallback to FF JSON if needed."""
-        if not self.cfg.news_filter_enabled:
-            return
-
-        if self.cfg.finnhub_api_key:
-            success = self._fetch_finnhub()
-            if success: return
-        
-        self._fetch_forexfactory_json()
+    def refresh(self):
+        if not self.cfg.news_enabled: return
+        if self.cfg.finnhub_key and self._fetch_finnhub(): return
+        self._fetch_ff()
 
     def _fetch_finnhub(self) -> bool:
-        """Fetch news from Finnhub API."""
         try:
-            log.info("NewsFilter: Fetching from Finnhub API...")
-            url = f"https://finnhub.io/api/v1/calendar/economic?token={self.cfg.finnhub_api_key}"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            resp = requests.get(url, headers=headers, timeout=15)
-            
-            if resp.status_code == 429:
-                log.warning("NewsFilter: Finnhub rate limit hit. Using cache.")
-                return False
-
-            if resp.status_code != 200:
-                log.debug(f"NewsFilter: Finnhub failed (HTTP {resp.status_code})")
-                return False
-            
-            data = resp.json()
-            # Finnhub returns a list of events directly under 'economicCalendar' or as root list
-            events_list = data.get('economicCalendar', []) if isinstance(data, dict) else data
-            
-            new_events = []
-            for ev in events_list:
-                # Finnhub time: 2022-01-01 13:30:00 (UTC)
-                new_events.append({
-                    "title": ev.get('event', 'Unknown'),
-                    "currency": ev.get('country', '').upper(),
-                    "time": ev.get('time'),
-                    "impact": ev.get('impact', 'low').lower()
-                })
-            
-            self.events = new_events
+            url = f"https://finnhub.io/api/v1/calendar/economic?token={self.cfg.finnhub_key}"
+            r   = requests.get(url, timeout=15)
+            if r.status_code == 429:
+                log.warning("Finnhub rate limit"); return False
+            if r.status_code != 200: return False
+            data = r.json()
+            evs  = data.get("economicCalendar", data if isinstance(data, list) else [])
+            self.events = [{"title": e.get("event",""),
+                            "currency": e.get("country","").upper(),
+                            "time": e.get("time",""),
+                            "impact": e.get("impact","low").lower()} for e in evs]
             self.last_fetch = datetime.utcnow()
-            self._save_cache()
-            log.info(f"NewsFilter: Loaded {len(self.events)} events via Finnhub.")
+            self._save()
+            log.info(f"Finnhub: {len(self.events)} events")
             return True
         except Exception as e:
-            log.error(f"NewsFilter: Finnhub Error: {e}")
-            return False
+            log.error(f"Finnhub: {e}"); return False
 
-    def _fetch_forexfactory_json(self):
-        """Fetch from FF JSON feed with improved browser-like headers."""
+    def _fetch_ff(self):
         try:
-            log.info("NewsFilter: Fetching from Forex Factory JSON...")
             url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/json",
-                "Referer": "https://www.forexfactory.com/"
-            }
-            resp = requests.get(url, headers=headers, timeout=15)
-            
-            if resp.status_code == 429:
-                log.warning("NewsFilter: Forex Factory rate limit (429). Penalty system will be inactive until next successful fetch.")
-                return
-
-            if resp.status_code != 200:
-                log.debug(f"NewsFilter: FF JSON failed (HTTP {resp.status_code})")
-                return
-
-            data = resp.json()
-            new_events = []
-            for ev in data:
-                # FF JSON time: 2026-04-12T18:30:00-04:00
-                new_events.append({
-                    "title": ev.get('title'),
-                    "currency": ev.get('country', '').upper(),
-                    "time": ev.get('date'),
-                    "impact": ev.get('impact', 'low').lower()
-                })
-            
-            self.events = new_events
+            r   = requests.get(url, headers={
+                "User-Agent":"Mozilla/5.0","Accept":"application/json",
+                "Referer":"https://www.forexfactory.com/"}, timeout=15)
+            if r.status_code != 200: return
+            self.events = [{"title": e.get("title",""),
+                            "currency": e.get("country","").upper(),
+                            "time": e.get("date",""),
+                            "impact": e.get("impact","low").lower()} for e in r.json()]
             self.last_fetch = datetime.utcnow()
-            self._save_cache()
-            log.info(f"NewsFilter: Loaded {len(self.events)} events via Forex Factory.")
+            self._save()
+            log.info(f"ForexFactory: {len(self.events)} events")
         except Exception as e:
-            log.error(f"NewsFilter: FF JSON Error: {e}")
+            log.error(f"FF: {e}")
 
-    def _parse_time(self, time_str: str) -> datetime:
-        """Robustly parse ISO8601 or Finnhub-style date strings."""
-        try:
-            # Try ISO 8601 with offset
-            return datetime.fromisoformat(time_str.replace('Z', '+00:00'))
-        except ValueError:
-            # Try Finnhub format: 2022-01-01 13:30:00
-            dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
-            return dt.replace(tzinfo=pytz.utc) if pytz else dt
-
-    def get_penalty(self, symbol: str) -> float:
-        """
-        Calculates penalty to be subtracted from the strategy score.
-        """
-        if not self.cfg.news_filter_enabled or not self.events:
-            return 0.0
-
-        # Refresh news if it's stale (handles rate limits by only fetching every 6h)
-        if self._cache_is_stale():
-            self.fetch_news()
-
-        # Extract currencies
-        clean_sym = symbol.upper()
-        if hasattr(self.cfg, 'mt5_symbol_suffix') and self.cfg.mt5_symbol_suffix:
-            clean_sym = clean_sym.replace(self.cfg.mt5_symbol_suffix.upper(), "")
-            
-        target_currencies = []
-        majors = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"]
-        for m in majors:
-            if m in clean_sym:
-                target_currencies.append(m)
-        if not target_currencies and len(clean_sym) >= 6:
-            target_currencies = [clean_sym[:3], clean_sym[3:6]]
-
-        now_utc = datetime.utcnow()
-        max_penalty = 0.0
-        active_news = []
-
+    def penalty(self, sym: str) -> float:
+        if not self.cfg.news_enabled or not self.events: return 0.0
+        if self._stale(): self.refresh()
+        curs = [c for c in ["USD","EUR","GBP","JPY","AUD","CAD","CHF","NZD"] if c in sym]
+        now  = datetime.utcnow()
+        mx   = 0.0
         for ev in self.events:
-            if ev['currency'] in target_currencies:
+            if ev["currency"] not in curs: continue
+            try:
+                ts   = ev["time"]
+                fmt  = "%Y-%m-%d %H:%M:%S"
                 try:
-                    ev_time_aware = self._parse_time(ev['time'])
-                    # Normalizing to naive UTC for comparison with now_utc
-                    if ev_time_aware.tzinfo:
-                        ev_time_naive = ev_time_aware.astimezone(pytz.utc).replace(tzinfo=None)
-                    else:
-                        ev_time_naive = ev_time_aware
-
-                    start_window = ev_time_naive - timedelta(minutes=30)
-                    end_window   = ev_time_naive + timedelta(minutes=60)
-                    
-                    if start_window <= now_utc <= end_window:
-                        impact = ev['impact']
-                        penalty = 4.0 if impact == "high" else (2.0 if impact == "medium" else 0.0)
-                        
-                        if penalty > max_penalty:
-                            max_penalty = penalty
-                        if penalty > 0:
-                            active_news.append(f"{ev['currency']} {impact.upper()}")
-                except Exception:
-                    continue
-
-        if max_penalty > 0:
-            log.warning(f"⚠️ NEWS ALERT: {symbol} -{max_penalty:.1f} penalty | Active: {', '.join(set(active_news))}")
-            
-        return max_penalty
+                    evt = datetime.fromisoformat(ts.replace("Z","+00:00"))
+                    if evt.tzinfo:
+                        evt = evt.replace(tzinfo=None) - timedelta(hours=evt.utcoffset().seconds//3600 if evt.utcoffset() else 0)
+                except:
+                    evt = datetime.strptime(ts[:19], fmt)
+                if evt - timedelta(minutes=30) <= now <= evt + timedelta(minutes=60):
+                    p = {"high":4.0,"medium":2.0}.get(ev["impact"],0.0)
+                    if p > mx:
+                        mx = p
+                        log.warning(f"NEWS: {ev['currency']} {ev['impact'].upper()} — penalty -{p:.0f}")
+            except: continue
+        return mx
 
 
-# ---------------------------------------------------------------------------
-# COMBINED SIGNAL ENGINE
-# ---------------------------------------------------------------------------
-
-class GoldenSignalEngine:
-    """
-    Orchestrates all three strategies and produces a combined signal.
-
-    1. Determine macro bias from 4H chart
-    2. Determine trend direction from 1H chart
-    3. Score all three strategies on 15m entry chart
-    4. Only signal if weighted combo score >= min_score
-    5. Use the best-scoring direction (BUY or SELL)
-    """
-
-    def __init__(self, cfg: GoldenConfig, fetcher: DataFetcher, news_filter: NewsFilter):
+# ─────────────────────────────────────────────
+#  SIGNAL ENGINE
+# ─────────────────────────────────────────────
+class Engine:
+    def __init__(self, cfg: Config, fetcher: Fetcher, news: News):
         self.cfg     = cfg
         self.fetcher = fetcher
-        self.news_filter = news_filter
+        self.news    = news
 
     def _session_ok(self) -> bool:
-        hour = datetime.utcnow().hour
-        for s, e in self.cfg.trade_sessions:
-            if s <= hour < e:
-                return True
-        return False
+        h = datetime.utcnow().hour
+        return any(s <= h < e for s, e in self.cfg.sessions)
 
-    def _macro_bias(self, symbol: str, use_mt5: bool) -> Optional[str]:
-        df = self.fetcher.fetch(symbol, self.cfg.confirm_tf, use_mt5)
-        if df.empty or len(df) < 210:
-            return None
-        df = Indicators.add_all(df, self.cfg)
-        if df.empty:
-            return None
-        last = df.iloc[-1]
-        if last["Close"] > last["ema_200"] and last["ema_50"] > last["ema_200"]:
-            return "BUY"
-        elif last["Close"] < last["ema_200"] and last["ema_50"] < last["ema_200"]:
-            return "SELL"
+    def _macro(self, sym: str, use_mt5: bool) -> Optional[str]:
+        df = self.fetcher.fetch(sym, self.cfg.tf_confirm, use_mt5)
+        if df.empty or len(df) < 210: return None
+        df = Ind.compute(df, self.cfg)
+        if df.empty: return None
+        r = df.iloc[-1]
+        if r["Close"] > r["e200"] and r["e50"] > r["e200"]: return "BUY"
+        if r["Close"] < r["e200"] and r["e50"] < r["e200"]: return "SELL"
         return None
 
-    def _trend(self, symbol: str, use_mt5: bool) -> Tuple[Optional[str], pd.DataFrame]:
-        df = self.fetcher.fetch(symbol, self.cfg.trend_tf, use_mt5)
-        if df.empty or len(df) < 60:
-            return None, pd.DataFrame()
-        df = Indicators.add_all(df, self.cfg)
-        if df.empty:
-            return None, pd.DataFrame()
-        last = df.iloc[-1]
-        if last["Close"] > last["ema_50"] and last["ema_fast"] > last["ema_slow"]:
-            return "BUY", df
-        elif last["Close"] < last["ema_50"] and last["ema_fast"] < last["ema_slow"]:
-            return "SELL", df
-        return None, df
+    def _trend(self, sym: str, use_mt5: bool) -> Optional[str]:
+        df = self.fetcher.fetch(sym, self.cfg.tf_trend, use_mt5)
+        if df.empty or len(df) < 60: return None
+        df = Ind.compute(df, self.cfg)
+        if df.empty: return None
+        r = df.iloc[-1]
+        if r["Close"] > r["e50"] and r["e_fast"] > r["e_slow"]: return "BUY"
+        if r["Close"] < r["e50"] and r["e_fast"] < r["e_slow"]: return "SELL"
+        return None
 
-    def _score_direction(self, df15: pd.DataFrame,
-                         direction: str) -> StrategyScore:
-        s = StrategyScore()
-        s.s1_score, s.s1_reasons = Strategy1_GoldenCross.score(df15, self.cfg, direction)
-        s.s2_score, s.s2_reasons = Strategy2_MeanReversion.score(df15, self.cfg, direction)
-        s.s3_score, s.s3_reasons = Strategy3_Divergence.score(df15, self.cfg, direction)
-        return s
-
-    def _calc_sl_tp(self, direction: str, entry: float, atr: float,
-                    df15: pd.DataFrame) -> Tuple[float, float, float]:
-        sl_dist = atr * self.cfg.sl_atr_multiplier
-
-        if direction == "BUY":
-            recent_low  = df15["Low"].tail(15).min()
-            swing_sl    = entry - recent_low
-            sl_dist     = max(sl_dist, swing_sl * 1.05)
-            sl          = entry - sl_dist
-            tp          = entry + sl_dist * self.cfg.tp_rr_ratio
+    def _sl_tp(self, d: str, entry: float, atr: float, df15: pd.DataFrame):
+        sl_d = atr * self.cfg.sl_atr_mult
+        if d == "BUY":
+            swing = entry - df15["Low"].tail(15).min()
+            sl_d  = max(sl_d, swing * 1.05)
+            return entry - sl_d, entry + sl_d * self.cfg.rr_target, sl_d
         else:
-            recent_high = df15["High"].tail(15).max()
-            swing_sl    = recent_high - entry
-            sl_dist     = max(sl_dist, swing_sl * 1.05)
-            sl          = entry + sl_dist
-            tp          = entry - sl_dist * self.cfg.tp_rr_ratio
+            swing = df15["High"].tail(15).max() - entry
+            sl_d  = max(sl_d, swing * 1.05)
+            return entry + sl_d, entry - sl_d * self.cfg.rr_target, sl_d
 
-        return sl, tp, sl_dist
-
-    def _calc_lots(self, equity: float, sl_dist: float, symbol: str) -> float:
-        cfg = self.cfg
-        risk = equity * cfg.risk_per_trade_pct
-        pip  = 0.01 if "JPY" in symbol else 0.0001
+    def _lots(self, equity: float, sl_dist: float, sym: str) -> float:
+        risk    = equity * self.cfg.risk_pct
+        pip     = 0.01 if "JPY" in sym else 0.0001
         sl_pips = sl_dist / pip
-        pip_val = 9.0 if "JPY" in symbol else 10.0
-        if sl_pips <= 0:
-            return 0.0
+        pip_val = 9.0 if "JPY" in sym else 10.0
+        if sl_pips <= 0: return 0.0
         lots = risk / (sl_pips * pip_val)
-        lots = round(lots / cfg.lot_step) * cfg.lot_step
-        lots = max(cfg.lot_min, min(lots, cfg.lot_max))
-        return round(lots, 2)
+        lots = round(lots / self.cfg.lot_step) * self.cfg.lot_step
+        return round(max(self.cfg.lot_min, min(lots, self.cfg.lot_max)), 2)
 
-    def generate(self, symbol: str, equity: float,
-                 use_mt5: bool = False) -> Optional[TradeSignal]:
+    def generate(self, sym: str, equity: float,
+                 use_mt5=False) -> Optional[Signal]:
 
         if not self._session_ok():
             return None
 
-        spread = self.fetcher.get_spread_pips(symbol)
-        if spread > self.cfg.spread_max_pips:
-            log.warning(f"{symbol}: spread {spread:.1f} pips too wide")
+        sp     = self.fetcher.spread(sym)
+        sp_lim = self.cfg.spread_limit(self.cfg.tf_entry)
+        if sp > sp_lim:
+            log.warning(f"{sym}: spread {sp:.1f} > {sp_lim:.0f} pips limit")
             return None
 
-        macro = self._macro_bias(symbol, use_mt5)
-        trend, _ = self._trend(symbol, use_mt5)
-
+        macro = self._macro(sym, use_mt5)
+        trend = self._trend(sym, use_mt5)
         if trend is None:
-            log.info(f"{symbol}: no clear trend on 1H")
+            log.info(f"{sym}: no clear trend")
             return None
-
-        # Soft macro filter
         if macro is not None and macro != trend:
-            log.info(f"{symbol}: macro ({macro}) vs trend ({trend}) conflict")
+            log.info(f"{sym}: macro ({macro}) conflicts with trend ({trend})")
             return None
 
-        df15 = self.fetcher.fetch(symbol, self.cfg.entry_tf, use_mt5)
+        df15 = self.fetcher.fetch(sym, self.cfg.tf_entry, use_mt5)
         if df15.empty or len(df15) < 80:
-            log.warning(f"{symbol}: insufficient 15m data")
+            log.warning(f"{sym}: insufficient 15m data")
             return None
+        df15 = Ind.compute(df15, self.cfg)
+        if df15.empty: return None
 
-        df15 = Indicators.add_all(df15, self.cfg)
-        if df15.empty:
-            return None
+        sc = Score()
+        sc.s1, sc.r1 = S1.score(df15, self.cfg, trend)
+        sc.s2, sc.r2 = S2.score(df15, self.cfg, trend)
+        sc.s3, sc.r3 = S3.score(df15, self.cfg, trend)
 
-        # Score both directions; pick the one aligned with trend
-        score = self._score_direction(df15, trend)
-        combined = score.combined(self.cfg)
+        combo   = sc.combined(self.cfg)
+        penalty = self.news.penalty(sym)
+        final   = combo - penalty
 
-        # Economic News Penalty
-        news_penalty = self.news_filter.get_penalty(symbol)
-        final_score = combined - news_penalty
-
-        if final_score < self.cfg.min_score:
-            log.info(
-                f"{symbol}: score {final_score:.2f} (Tech={combined:.2f}, News=-{news_penalty:.1f}) < "
-                f"{self.cfg.min_score} threshold | "
-                f"S1={score.s1_score:.1f} S2={score.s2_score:.1f} S3={score.s3_score:.1f}"
-            )
+        if final < self.cfg.min_score:
+            log.info(f"{sym}: score {final:.2f} (tech={combo:.2f} news=-{penalty:.1f}) < {self.cfg.min_score}")
             return None
 
         cur   = df15.iloc[-1]
         entry = float(cur["Close"])
         atr   = float(cur["atr"])
         rsi   = float(cur["rsi"])
-        mh    = float(cur["macd_hist"])
+        mh    = float(cur["macd_h"])
 
-        sl, tp, sl_dist = self._calc_sl_tp(trend, entry, atr, df15)
-        tp_dist = abs(tp - entry)
-        rr = tp_dist / sl_dist if sl_dist > 0 else 0
+        sl, tp, sl_d = self._sl_tp(trend, entry, atr, df15)
+        tp_d = abs(tp - entry)
+        rr   = round(tp_d / sl_d, 2) if sl_d > 0 else 0
 
-        if rr < self.cfg.min_rr_ratio:
-            log.info(f"{symbol}: RR={rr:.2f} below min {self.cfg.min_rr_ratio}")
+        if rr < self.cfg.rr_min:
+            log.info(f"{sym}: RR {rr:.2f} below min {self.cfg.rr_min}")
             return None
 
-        lots = self._calc_lots(equity, sl_dist, symbol)
-        if lots <= 0:
-            return None
+        lots = self._lots(equity, sl_d, sym)
+        if lots <= 0: return None
 
-        dom_strat = score.dominant_strategy()
-        all_reasons = (
-            [f"[S1-GoldenCross] {r}" for r in score.s1_reasons] +
-            [f"[S2-MeanRev]     {r}" for r in score.s2_reasons] +
-            [f"[S3-Divergence]  {r}" for r in score.s3_reasons]
+        dom   = sc.dominant()
+        lines = (
+            [f"[S1-EMA]   {r}" for r in sc.r1] +
+            [f"[S2-BB]    {r}" for r in sc.r2] +
+            [f"[S3-MACD]  {r}" for r in sc.r3]
         )
-        reason_str = (
+        reason = (
             f"Trend={trend} Macro={macro} | "
-            f"FinalScore={final_score:.2f} (Tech={combined:.2f}, News=-{news_penalty:.1f}) | "
-            f"DominantStrategy={dom_strat.value}\n" +
-            "\n".join(f"    {r}" for r in all_reasons)
+            f"Score={final:.1f}/10 (tech={combo:.1f} news=-{penalty:.1f}) | "
+            f"Dominant={dom.value}\n" +
+            "\n".join(f"    {l}" for l in lines)
         )
 
-        sig = TradeSignal(
-            symbol      = symbol,
-            signal      = SignalType.BUY if trend == "BUY" else SignalType.SELL,
-            entry_price = round(entry, 5),
-            stop_loss   = round(sl, 5),
-            take_profit = round(tp, 5),
-            sl_distance = round(sl_dist, 5),
-            tp_distance = round(tp_dist, 5),
-            rr_ratio    = round(rr, 2),
-            lots        = lots,
-            confidence  = round(final_score / 10.0, 3),
-            score       = score,
-            strategy    = dom_strat.value,
-            rsi         = round(rsi, 2),
-            macd_hist   = round(mh, 6),
-            atr         = round(atr, 5),
-            spread_pips = round(spread, 1),
-            reason      = reason_str,
+        sig = Signal(
+            symbol    = sym,
+            direction = Dir.BUY if trend == "BUY" else Dir.SELL,
+            entry     = round(entry, 5),
+            sl        = round(sl, 5),
+            tp        = round(tp, 5),
+            sl_dist   = round(sl_d, 5),
+            tp_dist   = round(tp_d, 5),
+            rr        = rr,
+            lots      = lots,
+            confidence= round(final / 10.0, 3),
+            score     = sc,
+            strategy  = dom.value,
+            rsi       = round(rsi, 2),
+            macd_hist = round(mh, 6),
+            atr       = round(atr, 5),
+            spread    = round(sp, 1),
+            reason    = reason,
         )
 
         log.info(
-            f"SIGNAL > {sig.signal.value} {symbol} | "
-            f"Entry={sig.entry_price} SL={sig.stop_loss} TP={sig.take_profit} | "
-            f"RR={sig.rr_ratio} FinalScore={final_score:.1f}/10"
+            f"SIGNAL > {sig.direction.value} {sym} | "
+            f"Entry={sig.entry} SL={sig.sl} TP={sig.tp} | "
+            f"RR={sig.rr} Score={final:.1f}/10"
         )
         return sig
 
 
-# ---------------------------------------------------------------------------
-# ML FILTER (Optional — Gradient Boosting)
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────
+#  OPTIONAL ML FILTER
+# ─────────────────────────────────────────────
+class ML:
+    FEATS = ["e_fast","e_slow","e50","rsi","macd","macd_h","bb_pos","bb_w",
+             "sk","sd","atr","adx","pdi","ndi","vr","ret","brat","ush","lsh"]
 
-class MLFilter:
-    FEATURES = [
-        "ema_fast", "ema_slow", "ema_50", "rsi", "macd", "macd_hist",
-        "bb_position", "bb_width", "stoch_k", "stoch_d",
-        "atr", "adx", "plus_di", "minus_di", "volume_ratio",
-        "price_change", "price_change_5", "body_ratio", "upper_shadow", "lower_shadow",
-    ]
-
-    def __init__(self, cfg: GoldenConfig):
-        self.cfg     = cfg
+    def __init__(self):
         self.models  = {}
         self.scalers = {}
 
-    def train(self, symbol: str, df: pd.DataFrame) -> float:
-        if not HAS_SKL:
-            return 0.0
+    def train(self, sym: str, df: pd.DataFrame) -> float:
+        if not HAS_SKL: return 0.0
         df = df.copy()
         df["target"] = (df["Close"].shift(-1) > df["Close"]).astype(int)
         df.dropna(inplace=True)
-        avail = [c for c in self.FEATURES if c in df.columns]
-        X, y  = df[avail].values, df["target"].values
-        if len(X) < 200:
-            return 0.0
-        split = int(len(X) * 0.8)
-        scaler = RobustScaler()
-        X_tr = scaler.fit_transform(X[:split])
-        X_te = scaler.transform(X[split:])
-        model = GradientBoostingClassifier(
-            n_estimators=300, max_depth=4, learning_rate=0.03,
-            subsample=0.8, min_samples_leaf=10, random_state=42)
-        model.fit(X_tr, y[:split])
-        acc = accuracy_score(y[split:], model.predict(X_te))
-        f1  = f1_score(y[split:], model.predict(X_te))
-        self.models[symbol]  = model
-        self.scalers[symbol] = scaler
-        log.info(f"ML {symbol}: accuracy={acc:.3f} f1={f1:.3f}")
+        av = [c for c in self.FEATS if c in df.columns]
+        X, y = df[av].values, df["target"].values
+        if len(X) < 200: return 0.0
+        n = int(len(X) * 0.8)
+        sc = RobustScaler()
+        Xtr = sc.fit_transform(X[:n])
+        Xte = sc.transform(X[n:])
+        m = GradientBoostingClassifier(n_estimators=200, max_depth=3,
+                                        learning_rate=0.05, random_state=42)
+        m.fit(Xtr, y[:n])
+        acc = accuracy_score(y[n:], m.predict(Xte))
+        self.models[sym]  = m
+        self.scalers[sym] = sc
+        log.info(f"ML {sym}: acc={acc:.3f}")
         return acc
 
-    def predict(self, symbol: str, df: pd.DataFrame, direction: str) -> float:
-        if not HAS_SKL or symbol not in self.models:
-            return 0.5
-        if df.empty:
-            return 0.5
-        avail = [c for c in self.FEATURES if c in df.columns]
-        X = self.scalers[symbol].transform(df[avail].iloc[-1:].values)
-        prob = self.models[symbol].predict_proba(X)[0]
-        return float(prob[1]) if direction == "BUY" else float(prob[0])
+    def predict(self, sym: str, df: pd.DataFrame, d: str) -> float:
+        if not HAS_SKL or sym not in self.models: return 0.5
+        av = [c for c in self.FEATS if c in df.columns]
+        X  = self.scalers[sym].transform(df[av].iloc[-1:].values)
+        p  = self.models[sym].predict_proba(X)[0]
+        return float(p[1]) if d == "BUY" else float(p[0])
 
 
-# ---------------------------------------------------------------------------
-# TRADE EXECUTOR
-# ---------------------------------------------------------------------------
-
-class TradeExecutor:
-
-    def __init__(self, cfg: GoldenConfig, fetcher: DataFetcher):
+# ─────────────────────────────────────────────
+#  EXECUTOR  (paper + live)
+# ─────────────────────────────────────────────
+class Executor:
+    def __init__(self, cfg: Config, fetcher: Fetcher):
         self.cfg     = cfg
         self.fetcher = fetcher
 
-    def _mt5_sym(self, symbol: str) -> str:
-        return symbol + self.cfg.mt5_symbol_suffix
+    def _sym(self, s: str) -> str:
+        return s + self.cfg.mt5_suffix
 
-    def _get_filling_mode(self, symbol: str) -> int:
-        info = mt5.symbol_info(symbol)
-        if not info:
-            return mt5.ORDER_FILLING_IOC
-        
-        # Robust handling of filling mode bitmask
-        # Some MT5 versions lack SYMBOL_FILLING_* module constants
-        filling_mode = getattr(info, 'filling_mode', 0)
-        
-        # Fallback to standard MT5 bit values: FOK=1, IOC=2
-        fok_flag = getattr(mt5, 'SYMBOL_FILLING_FOK', 1)
-        ioc_flag = getattr(mt5, 'SYMBOL_FILLING_IOC', 2)
-        
-        if filling_mode & fok_flag:
-            return mt5.ORDER_FILLING_FOK
-        elif filling_mode & ioc_flag:
-            return mt5.ORDER_FILLING_IOC
-        
+    def _fill_mode(self, sym: str) -> int:
+        info = mt5.symbol_info(sym)
+        if not info: return mt5.ORDER_FILLING_IOC
+        fm  = getattr(info, "filling_mode", 0)
+        fok = getattr(mt5, "SYMBOL_FILLING_FOK", 1)
+        ioc = getattr(mt5, "SYMBOL_FILLING_IOC", 2)
+        if fm & fok: return mt5.ORDER_FILLING_FOK
+        if fm & ioc: return mt5.ORDER_FILLING_IOC
         return mt5.ORDER_FILLING_RETURN
 
+    def _normalize_volume(self, volume: float, info: Any) -> float:
+        step = float(getattr(info, "volume_step", self.cfg.lot_step) or self.cfg.lot_step)
+        vmin = float(getattr(info, "volume_min", self.cfg.lot_min) or self.cfg.lot_min)
+        vmax = float(getattr(info, "volume_max", self.cfg.lot_max) or self.cfg.lot_max)
+        if step <= 0:
+            step = self.cfg.lot_step
+        volume = max(vmin, min(volume, vmax))
+        volume = round(round(volume / step) * step, 2)
+        return max(vmin, min(volume, vmax))
 
-    def get_positions(self) -> List[dict]:
-        if not HAS_MT5:
-            return []
-        positions = mt5.positions_get()
-        if positions is None:
-            return []
-        return [{
-            "ticket": p.ticket, "symbol": p.symbol,
-            "type": "BUY" if p.type == 0 else "SELL",
-            "volume": p.volume, "price_open": p.price_open,
-            "price_cur": p.price_current, "sl": p.sl, "tp": p.tp,
-            "profit": p.profit, "magic": p.magic,
-        } for p in positions]
+    def _retcode_text(self, result: Any) -> str:
+        code = getattr(result, "retcode", None)
+        comment = getattr(result, "comment", "")
+        return f"retcode={code} comment={comment}"
 
-    def has_position(self, symbol: str) -> bool:
-        sym = self._mt5_sym(symbol)
-        return any(p["symbol"] == sym and p["magic"] == self.cfg.mt5_magic
-                   for p in self.get_positions())
+    def positions(self) -> List[dict]:
+        if not HAS_MT5: return []
+        ps = mt5.positions_get()
+        if ps is None: return []
+        return [{"ticket":p.ticket,"symbol":p.symbol,
+                 "type":"BUY" if p.type==0 else "SELL",
+                 "volume":p.volume,"price_open":p.price_open,
+                 "price_cur":p.price_current,"sl":p.sl,"tp":p.tp,
+                 "profit":p.profit,"magic":p.magic} for p in ps]
 
-    def execute_live(self, signal: TradeSignal) -> bool:
-        if not HAS_MT5:
+    def has_position(self, sym: str) -> bool:
+        mt5s = self._sym(sym)
+        return any(p["symbol"]==mt5s and p["magic"]==self.cfg.mt5_magic
+                   for p in self.positions())
+
+    def live(self, sig: Signal) -> bool:
+        if not HAS_MT5: return False
+        mt5s = self._sym(sig.symbol)
+        if not mt5.symbol_select(mt5s, True):
+            log.error(f"Cannot select {mt5s}"); return False
+        info = mt5.symbol_info(mt5s)
+        if not info:
+            log.error(f"No symbol info for {mt5s}")
             return False
-        mt5_sym = self._mt5_sym(signal.symbol)
-        if not mt5.symbol_select(mt5_sym, True):
-            log.error(f"Cannot select {mt5_sym}")
+        trade_mode = getattr(info, "trade_mode", None)
+        full_mode = getattr(mt5, "SYMBOL_TRADE_MODE_FULL", 4)
+        if trade_mode is not None and trade_mode != full_mode:
+            log.error(f"{mt5s} trading not allowed by broker (trade_mode={trade_mode})")
             return False
-        tick = mt5.symbol_info_tick(mt5_sym)
-        if tick is None:
+        tick = mt5.symbol_info_tick(mt5s)
+        if not tick: return False
+        ot, price = (mt5.ORDER_TYPE_BUY, tick.ask) if sig.direction == Dir.BUY \
+                 else (mt5.ORDER_TYPE_SELL, tick.bid)
+        digits = int(getattr(info, "digits", 5) or 5)
+        point = float(getattr(info, "point", 0.0) or (0.01 if "JPY" in sig.symbol else 0.0001))
+        volume = self._normalize_volume(sig.lots, info)
+        price = round(float(price), digits)
+        sl = round(float(sig.sl), digits)
+        tp = round(float(sig.tp), digits)
+        stops_level = int(getattr(info, "trade_stops_level", 0) or 0)
+        if stops_level > 0:
+            min_dist = stops_level * point
+            if abs(price - sl) < min_dist or abs(tp - price) < min_dist:
+                log.error(f"{mt5s} stops too close for broker: min_dist={min_dist:.5f}")
+                return False
+        req = {"action": mt5.TRADE_ACTION_DEAL, "symbol": mt5s,
+               "volume": float(volume), "type": ot,
+               "price": price, "sl": sl, "tp": tp,
+               "magic": self.cfg.mt5_magic, "comment": self.cfg.mt5_comment,
+               "deviation": 20,
+               "type_time": mt5.ORDER_TIME_GTC,
+               "type_filling": self._fill_mode(mt5s)}
+        check = mt5.order_check(req)
+        if check and getattr(check, "retcode", None) not in (None, mt5.TRADE_RETCODE_DONE):
+            log.error(f"MT5 order check failed for {mt5s}: {self._retcode_text(check)}")
             return False
-        if signal.signal == SignalType.BUY:
-            order_type, price = mt5.ORDER_TYPE_BUY, tick.ask
-        else:
-            order_type, price = mt5.ORDER_TYPE_SELL, tick.bid
-        req = {
-            "action": mt5.TRADE_ACTION_DEAL, "symbol": mt5_sym,
-            "volume": float(signal.lots), "type": order_type,
-            "price": price, "sl": signal.stop_loss, "tp": signal.take_profit,
-            "magic": self.cfg.mt5_magic, "comment": self.cfg.mt5_comment,
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": self._get_filling_mode(mt5_sym),
-        }
-        result = mt5.order_send(req)
-        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-            log.info(f"MT5 ORDER > {signal.signal.value} {mt5_sym} @ {price:.5f}")
+        res = mt5.order_send(req)
+        if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+            log.info(f"MT5 ORDER PLACED: {sig.direction.value} {mt5s} @ {price:.5f}")
             return True
-        log.error(f"MT5 order failed: {mt5.last_error()}")
+        if res:
+            log.error(f"MT5 order failed for {mt5s}: {self._retcode_text(res)} last_error={mt5.last_error()}")
+        else:
+            log.error(f"MT5 order failed for {mt5s}: last_error={mt5.last_error()}")
         return False
 
-    def execute_paper(self, signal: TradeSignal) -> bool:
+    def paper(self, sig: Signal) -> bool:
         log.info(
-            f"[PAPER] {signal.signal.value} {signal.symbol} "
-            f"{signal.lots}L @ {signal.entry_price:.5f} | "
-            f"SL={signal.stop_loss:.5f} TP={signal.take_profit:.5f} | "
-            f"RR={signal.rr_ratio} Score={signal.confidence*10:.1f}/10"
+            f"[PAPER] {sig.direction.value} {sig.symbol} "
+            f"{sig.lots}L @ {sig.entry:.5f} | "
+            f"SL={sig.sl:.5f}  TP={sig.tp:.5f} | "
+            f"RR={sig.rr}  Score={sig.confidence*10:.1f}/10"
         )
+        print(f"\n  {'▲' if sig.direction==Dir.BUY else '▼'}  {sig.direction.value} {sig.symbol}")
+        print(f"     Entry : {sig.entry:.5f}")
+        print(f"     SL    : {sig.sl:.5f}  ({round(sig.sl_dist/(0.01 if 'JPY' in sig.symbol else 0.0001))} pips)")
+        print(f"     TP    : {sig.tp:.5f}  ({round(sig.tp_dist/(0.01 if 'JPY' in sig.symbol else 0.0001))} pips)")
+        print(f"     RR    : 1:{sig.rr}    Score: {sig.confidence*10:.1f}/10")
+        print(f"     Why   : {sig.score.r1[:1] + sig.score.r2[:1] + sig.score.r3[:1]}")
         return True
 
-    def execute(self, signal: TradeSignal) -> bool:
+    def execute(self, sig: Signal) -> bool:
         if self.cfg.live_trading and HAS_MT5:
-            return self.execute_live(signal)
-        return self.execute_paper(signal)
+            return self.live(sig)
+        return self.paper(sig)
 
-    def update_trailing_sl(self):
-        if not HAS_MT5:
-            return
-        for pos in self.get_positions():
-            if pos["magic"] != self.cfg.mt5_magic:
-                continue
-            df = self.fetcher.fetch_mt5(pos["symbol"], "15m")
-            if df.empty:
-                continue
-            df   = Indicators.add_all(df, self.cfg)
-            if df.empty:
-                continue
-            atr  = float(df["atr"].iloc[-1])
+    def trail_sl(self):
+        if not HAS_MT5: return
+        for p in self.positions():
+            if p["magic"] != self.cfg.mt5_magic: continue
+            df = self.fetcher.mt5_fetch(p["symbol"].replace(self.cfg.mt5_suffix,""), "15m")
+            if df.empty: continue
+            atr  = float(Ind.compute(df, self.cfg)["atr"].iloc[-1])
             dist = atr * 1.0
-            if pos["type"] == "BUY":
-                new_sl = pos["price_cur"] - dist
-                if new_sl > pos["sl"] and new_sl < pos["price_cur"]:
-                    self._modify_sl(pos["ticket"], pos["symbol"], new_sl, pos["tp"])
+            nsl  = None
+            if p["type"] == "BUY":
+                nsl = p["price_cur"] - dist
+                if nsl <= p["sl"] or nsl >= p["price_cur"]: nsl = None
             else:
-                new_sl = pos["price_cur"] + dist
-                if new_sl < pos["sl"] and new_sl > pos["price_cur"]:
-                    self._modify_sl(pos["ticket"], pos["symbol"], new_sl, pos["tp"])
-
-    def _modify_sl(self, ticket, symbol, new_sl, tp):
-        req = {"action": mt5.TRADE_ACTION_SLTP, "symbol": symbol,
-               "sl": new_sl, "tp": tp, "position": ticket}
-        result = mt5.order_send(req)
-        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-            log.info(f"Trailing SL → {new_sl:.5f} (ticket {ticket})")
+                nsl = p["price_cur"] + dist
+                if nsl >= p["sl"] or nsl <= p["price_cur"]: nsl = None
+            if nsl:
+                r = mt5.order_send({"action":mt5.TRADE_ACTION_SLTP,
+                                    "symbol":p["symbol"],"sl":nsl,"tp":p["tp"],
+                                    "position":p["ticket"]})
+                if r and r.retcode == mt5.TRADE_RETCODE_DONE:
+                    log.info(f"Trail SL → {nsl:.5f} (ticket {p['ticket']})")
 
 
-# ---------------------------------------------------------------------------
-# RISK MANAGER
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────
+#  RISK MANAGER
+# ─────────────────────────────────────────────
+class Risk:
+    def __init__(self, cfg: Config):
+        self.cfg          = cfg
+        self.day_equity   = 0.0
+        self.today        = datetime.utcnow().date()
+        self.consec_loss  = 0
+        self.paused       = False
+        self.pause_reason = ""
 
-class RiskManager:
-
-    def __init__(self, cfg: GoldenConfig):
-        self.cfg            = cfg
-        self.day_equity     = 0.0
-        self.today          = datetime.utcnow().date()
-        self.paused         = False
-        self.pause_reason   = ""
-
-    def update(self, equity: float):
+    def new_day(self, equity: float):
         today = datetime.utcnow().date()
         if today != self.today:
-            log.info(f"New day. Equity reset from {self.day_equity:.2f} → {equity:.2f}")
-            self.day_equity = equity
-            self.today      = today
-            self.paused     = False
+            log.info(f"New trading day. Equity {self.day_equity:.2f} → {equity:.2f}")
+            self.day_equity  = equity
+            self.today       = today
+            self.paused      = False
+            self.consec_loss = 0
         elif self.day_equity == 0:
             self.day_equity = equity
 
-    def check(self, equity: float) -> bool:
-        if self.day_equity <= 0:
-            return True
-        pct = (equity - self.day_equity) / self.day_equity
-        if pct <= -self.cfg.max_daily_loss_pct:
-            if not self.paused:
-                self.paused = True
-                self.pause_reason = f"Daily loss {pct:.1%} hit limit"
+    def record_result(self, won: bool):
+        if won:
+            self.consec_loss = 0
+        else:
+            self.consec_loss += 1
+            if self.consec_loss >= self.cfg.consec_loss_limit:
+                self.paused       = True
+                self.pause_reason = f"{self.consec_loss} consecutive losses — stopping today"
                 log.warning(f"⛔ PAUSED: {self.pause_reason}")
-            return False
-        if self.paused:
-            self.paused = False
-        return True
 
     def can_trade(self, equity: float, n_open: int) -> Tuple[bool, str]:
-        if not self.check(equity):
+        if self.paused:
             return False, self.pause_reason
+        if self.day_equity > 0:
+            dd = (equity - self.day_equity) / self.day_equity
+            if dd <= -self.cfg.daily_loss_limit:
+                self.paused       = True
+                self.pause_reason = f"Daily loss {dd:.1%} hit {self.cfg.daily_loss_limit:.0%} limit"
+                log.warning(f"⛔ PAUSED: {self.pause_reason}")
+                return False, self.pause_reason
         if n_open >= self.cfg.max_positions:
-            return False, f"Max positions ({self.cfg.max_positions}) reached"
+            return False, f"Max {self.cfg.max_positions} positions open"
         return True, ""
 
 
-# ---------------------------------------------------------------------------
-# TRADE LOGGER
-# ---------------------------------------------------------------------------
-
-class TradeLogger:
-
-    def __init__(self, cfg: GoldenConfig):
+# ─────────────────────────────────────────────
+#  TRADE LOGGER
+# ─────────────────────────────────────────────
+class Logger:
+    def __init__(self, cfg: Config):
         self.cfg    = cfg
         self.trades = []
         self._load()
 
     def _load(self):
-        if os.path.exists(self.cfg.trade_log_file):
+        if os.path.exists(self.cfg.log_file):
             try:
-                with open(self.cfg.trade_log_file) as f:
-                    self.trades = json.load(f)
+                self.trades = json.load(open(self.cfg.log_file))
                 log.info(f"Loaded {len(self.trades)} trade records")
-            except Exception as e:
-                log.error(f"Could not load trade log: {e}")
+            except: pass
 
     def save(self):
-        tmp = self.cfg.trade_log_file + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(self.trades, f, indent=2)
-        os.replace(tmp, self.cfg.trade_log_file)
+        tmp = self.cfg.log_file + ".tmp"
+        json.dump(self.trades, open(tmp, "w"), indent=2)
+        os.replace(tmp, self.cfg.log_file)
 
-    def log_signal(self, signal: TradeSignal):
-        entry = signal.to_dict()
+    def log_signal(self, sig: Signal):
+        entry = sig.to_dict()
         entry["type"] = "signal"
         self.trades.append(entry)
         self.save()
 
-    def get_stats(self) -> dict:
-        results = [t for t in self.trades if t.get("type") == "result"]
-        if not results:
-            return {"total_trades": 0}
-        pnls   = [t["pnl_usd"] for t in results]
+    def stats(self) -> dict:
+        closed = [t for t in self.trades if t.get("type") == "result"]
+        if not closed: return {"total": 0}
+        pnls   = [t["pnl_usd"] for t in closed]
         wins   = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p <= 0]
-        gw  = sum(wins) if wins else 0
-        gl  = abs(sum(losses)) if losses else 0.001
-        pf  = gw / gl
-        wr  = len(wins) / len(pnls) if pnls else 0
-        cum = np.cumsum(pnls)
-        pk  = np.maximum.accumulate(cum)
-        dd  = float(np.max(pk - cum)) if len(cum) else 0
-        # Per-strategy breakdown
-        strategy_stats = {}
-        for t in results:
-            strat = t.get("strategy", "Unknown")
-            if strat not in strategy_stats:
-                strategy_stats[strat] = {"wins": 0, "losses": 0, "pnl": 0}
-            if t["pnl_usd"] > 0:
-                strategy_stats[strat]["wins"] += 1
-            else:
-                strategy_stats[strat]["losses"] += 1
-            strategy_stats[strat]["pnl"] += t["pnl_usd"]
-
+        gw     = sum(wins) or 0
+        gl     = abs(sum(losses)) or 0.001
+        cum    = np.cumsum(pnls)
+        pk     = np.maximum.accumulate(cum)
+        dd     = float(np.max(pk - cum)) if len(cum) else 0
+        by_s   = {}
+        for t in closed:
+            s = t.get("strategy","?")
+            if s not in by_s: by_s[s] = {"wins":0,"losses":0,"pnl":0.0}
+            if t["pnl_usd"] > 0: by_s[s]["wins"] += 1
+            else: by_s[s]["losses"] += 1
+            by_s[s]["pnl"] += t["pnl_usd"]
         return {
-            "total_trades":     len(results),
-            "wins":             len(wins),
-            "losses":           len(losses),
-            "win_rate_pct":     round(wr * 100, 1),
-            "total_pnl_usd":    round(sum(pnls), 2),
-            "avg_win_usd":      round(float(np.mean(wins)), 2) if wins else 0,
-            "avg_loss_usd":     round(float(np.mean(losses)), 2) if losses else 0,
-            "profit_factor":    round(pf, 2),
-            "expectancy_usd":   round(float(np.mean(pnls)), 2),
-            "max_drawdown_usd": round(dd, 2),
-            "best_trade_usd":   round(max(pnls), 2) if pnls else 0,
-            "worst_trade_usd":  round(min(pnls), 2) if pnls else 0,
-            "by_strategy":      strategy_stats,
+            "total":          len(closed),
+            "wins":           len(wins),
+            "losses":         len(losses),
+            "win_rate_%":     round(len(wins)/len(pnls)*100, 1),
+            "total_pnl_usd":  round(sum(pnls), 2),
+            "avg_win_usd":    round(float(np.mean(wins)), 2) if wins else 0,
+            "avg_loss_usd":   round(float(np.mean(losses)), 2) if losses else 0,
+            "profit_factor":  round(gw/gl, 2),
+            "expectancy_usd": round(float(np.mean(pnls)), 2),
+            "max_drawdown":   round(dd, 2),
+            "by_strategy":    by_s,
         }
 
 
-# ---------------------------------------------------------------------------
-# BACKTESTER
-# ---------------------------------------------------------------------------
-
-class GoldenBacktester:
-    """
-    Walk-forward backtest with per-strategy attribution.
-    Uses daily bars for speed; same logic as live engine.
-    """
-
-    def __init__(self, cfg: GoldenConfig):
+# ─────────────────────────────────────────────
+#  BACKTESTER
+# ─────────────────────────────────────────────
+class Backtest:
+    def __init__(self, cfg: Config):
         self.cfg     = cfg
-        self.fetcher = DataFetcher(cfg)
+        self.fetcher = Fetcher(cfg)
 
-    def run(self, symbol: str, initial_capital: float = 10_000.0) -> dict:
-        log.info(f"Backtesting {symbol} | Capital=${initial_capital:,.0f}")
-        df = self.fetcher.fetch_yf(symbol, "1d")
+    def run(self, sym: str, capital=10_000.0) -> dict:
+        log.info(f"Backtesting {sym} | Capital=${capital:,.0f}")
+        df = self.fetcher.yf(sym, "1d")
         if df.empty or len(df) < 150:
-            log.error(f"Insufficient data for {symbol}")
+            log.error(f"Not enough data for {sym}")
             return {}
+        df = Ind.compute(df, self.cfg)
+        log.info(f"{sym}: {len(df)} daily bars")
+        cap, pos, trades, equity = capital, None, [], [capital]
 
-        df = Indicators.add_all(df, self.cfg)
-        log.info(f"Loaded {len(df)} daily bars for {symbol}")
+        for i in range(100, len(df)-1):
+            bar    = df.iloc[i]
+            window = df.iloc[max(0, i-100):i+1].copy()
 
-        capital  = initial_capital
-        position = None
-        trades   = []
-        equity   = [capital]
-
-        for i in range(100, len(df) - 1):
-            bar  = df.iloc[i]
-            window = df.iloc[max(0, i - 100): i + 1].copy()
-
-            # Manage open position
-            if position is not None:
-                high, low = bar["High"], bar["Low"]
-                closed, outcome, exit_p = False, "", 0.0
-
-                if position["side"] == "BUY":
-                    if low <= position["sl"]:
-                        exit_p, outcome, closed = position["sl"], "LOSS", True
-                    elif high >= position["tp"]:
-                        exit_p, outcome, closed = position["tp"], "WIN", True
+            if pos:
+                hi, lo    = bar["High"], bar["Low"]
+                closed, outcome, xp = False, "", 0.0
+                if pos["side"] == "BUY":
+                    if lo <= pos["sl"]:   xp, outcome, closed = pos["sl"],  "LOSS", True
+                    elif hi >= pos["tp"]: xp, outcome, closed = pos["tp"],  "WIN",  True
                 else:
-                    if high >= position["sl"]:
-                        exit_p, outcome, closed = position["sl"], "LOSS", True
-                    elif low <= position["tp"]:
-                        exit_p, outcome, closed = position["tp"], "WIN", True
-
+                    if hi >= pos["sl"]:   xp, outcome, closed = pos["sl"],  "LOSS", True
+                    elif lo <= pos["tp"]: xp, outcome, closed = pos["tp"],  "WIN",  True
                 if closed:
-                    pnl_pts = (exit_p - position["entry"]) if position["side"] == "BUY" \
-                              else (position["entry"] - exit_p)
-                    pip = 0.01 if "JPY" in symbol else 0.0001
-                    pnl_pips = pnl_pts / pip
-                    pnl_usd  = pnl_pips * 10.0 * position["lots"]
-                    capital += pnl_usd
-                    trades.append({
-                        "side":     position["side"],
-                        "strategy": position["strategy"],
-                        "entry":    position["entry"],
-                        "exit":     exit_p,
-                        "sl":       position["sl"],
-                        "tp":       position["tp"],
-                        "lots":     position["lots"],
-                        "pnl_pips": round(pnl_pips, 1),
-                        "pnl_usd":  round(pnl_usd, 2),
-                        "outcome":  outcome,
-                        "bar":      i,
-                    })
-                    position = None
+                    pip  = 0.01 if "JPY" in sym else 0.0001
+                    pp   = (xp - pos["entry"]) if pos["side"]=="BUY" else (pos["entry"] - xp)
+                    pips = pp / pip
+                    usd  = pips * 10.0 * pos["lots"]
+                    cap += usd
+                    trades.append({"side":pos["side"],"strategy":pos["strat"],
+                                   "pnl_pips":round(pips,1),"pnl_usd":round(usd,2),"outcome":outcome})
+                    pos = None
 
-            # New signal?
-            if position is None:
-                direction, score, strategy = self._signal(window)
-                if direction and score.combined(self.cfg) >= self.cfg.min_score:
+            if pos is None:
+                d, sc, strat = self._signal(window)
+                if d and sc.combined(self.cfg) >= self.cfg.min_score:
                     entry = float(bar["Close"])
                     atr   = float(bar["atr"])
-                    sl_d  = atr * self.cfg.sl_atr_multiplier
-                    tp_d  = sl_d * self.cfg.tp_rr_ratio
-
-                    if direction == "BUY":
-                        sl, tp = entry - sl_d, entry + tp_d
-                    else:
-                        sl, tp = entry + sl_d, entry - tp_d
-
-                    pip = 0.01 if "JPY" in symbol else 0.0001
+                    sl_d  = atr * self.cfg.sl_atr_mult
+                    sl = entry - sl_d if d=="BUY" else entry + sl_d
+                    tp = entry + sl_d*self.cfg.rr_target if d=="BUY" else entry - sl_d*self.cfg.rr_target
+                    pip  = 0.01 if "JPY" in sym else 0.0001
                     lots = max(self.cfg.lot_min, min(
-                        round((capital * self.cfg.risk_per_trade_pct) / (sl_d / pip * 10), 2),
-                        self.cfg.lot_max))
+                        round((cap * self.cfg.risk_pct) / (sl_d/pip*10), 2), self.cfg.lot_max))
+                    pos = {"side":d,"entry":entry,"sl":sl,"tp":tp,"lots":lots,"strat":strat}
+            equity.append(cap)
 
-                    position = {
-                        "side": direction, "entry": entry, "sl": sl, "tp": tp,
-                        "lots": lots, "strategy": strategy, "bar": i,
-                    }
+        return self._stats(trades, capital, cap, equity, sym)
 
-            equity.append(capital)
+    def _signal(self, w: pd.DataFrame):
+        if len(w) < 60: return None, Score(), ""
+        r = w.iloc[-1]
+        if r["Close"] > r["e50"] and r["e_fast"] > r["e_slow"]: d = "BUY"
+        elif r["Close"] < r["e50"] and r["e_fast"] < r["e_slow"]: d = "SELL"
+        else: return None, Score(), ""
+        sc = Score()
+        sc.s1, sc.r1 = S1.score(w, self.cfg, d)
+        sc.s2, sc.r2 = S2.score(w, self.cfg, d)
+        sc.s3, sc.r3 = S3.score(w, self.cfg, d)
+        return d, sc, sc.dominant().value
 
-        # Close remaining
-        if position and not df.empty:
-            last = float(df["Close"].iloc[-1])
-            p = (last - position["entry"]) if position["side"] == "BUY" \
-                else (position["entry"] - last)
-            pip = 0.01 if "JPY" in symbol else 0.0001
-            pnl_pips = p / pip
-            pnl_usd  = pnl_pips * 10 * position["lots"]
-            capital += pnl_usd
-            trades.append({
-                "side": position["side"], "strategy": position["strategy"],
-                "pnl_pips": round(pnl_pips, 1), "pnl_usd": round(pnl_usd, 2),
-                "outcome": "WIN" if pnl_usd > 0 else "LOSS",
-            })
-
-        return self._stats(trades, initial_capital, capital, equity, symbol)
-
-    def _signal(self, window: pd.DataFrame) -> Tuple[Optional[str], StrategyScore, str]:
-        if len(window) < 60:
-            return None, StrategyScore(), ""
-
-        cur  = window.iloc[-1]
-        trend = None
-        if cur["Close"] > cur["ema_50"] and cur["ema_fast"] > cur["ema_slow"]:
-            trend = "BUY"
-        elif cur["Close"] < cur["ema_50"] and cur["ema_fast"] < cur["ema_slow"]:
-            trend = "SELL"
-        else:
-            return None, StrategyScore(), ""
-
-        score = StrategyScore()
-        score.s1_score, score.s1_reasons = Strategy1_GoldenCross.score(window, self.cfg, trend)
-        score.s2_score, score.s2_reasons = Strategy2_MeanReversion.score(window, self.cfg, trend)
-        score.s3_score, score.s3_reasons = Strategy3_Divergence.score(window, self.cfg, trend)
-
-        dom = score.dominant_strategy()
-        return trend, score, dom.value
-
-    def _stats(self, trades, initial, final, equity, symbol) -> dict:
-        if not trades:
-            return {"total_trades": 0, "note": "No trades generated"}
-
+    def _stats(self, trades, init, final, equity, sym) -> dict:
+        if not trades: return {"total":0,"note":"No trades"}
         pnls   = [t["pnl_usd"] for t in trades]
         wins   = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p <= 0]
-
-        eq  = np.array(equity)
-        pk  = np.maximum.accumulate(eq)
-        dd  = (pk - eq) / pk
-        max_dd = float(np.max(dd)) * 100
-
-        gw = sum(wins) if wins else 0
-        gl = abs(sum(losses)) if losses else 0.001
-
-        # Per-strategy breakdown
-        by_strat = {}
+        eq     = np.array(equity)
+        pk     = np.maximum.accumulate(eq)
+        dd     = float(np.max((pk-eq)/pk.clip(min=1e-9)))*100
+        gw     = sum(wins) or 0
+        gl     = abs(sum(losses)) or 0.001
+        by_s   = {}
         for t in trades:
-            s = t.get("strategy", "?")
-            if s not in by_strat:
-                by_strat[s] = {"trades": 0, "wins": 0, "pnl": 0}
-            by_strat[s]["trades"] += 1
-            by_strat[s]["pnl"]    += t["pnl_usd"]
-            if t["pnl_usd"] > 0:
-                by_strat[s]["wins"] += 1
-
-        stats = {
-            "symbol":            symbol,
-            "initial_capital":   round(initial, 2),
-            "final_capital":     round(final, 2),
-            "total_return_pct":  round((final - initial) / initial * 100, 2),
-            "total_trades":      len(trades),
-            "wins":              len(wins),
-            "losses":            len(losses),
-            "win_rate_pct":      round(len(wins) / len(trades) * 100, 1) if trades else 0,
-            "profit_factor":     round(gw / gl, 2),
-            "avg_win_usd":       round(float(np.mean(wins)), 2) if wins else 0,
-            "avg_loss_usd":      round(float(np.mean(losses)), 2) if losses else 0,
-            "best_trade_usd":    round(max(pnls), 2),
-            "worst_trade_usd":   round(min(pnls), 2),
-            "max_drawdown_pct":  round(max_dd, 2),
-            "expectancy_usd":    round(float(np.mean(pnls)), 2),
-            "by_strategy":       by_strat,
+            s = t.get("strategy","?")
+            if s not in by_s: by_s[s] = {"trades":0,"wins":0,"pnl":0}
+            by_s[s]["trades"] += 1
+            by_s[s]["pnl"]    += t["pnl_usd"]
+            if t["pnl_usd"] > 0: by_s[s]["wins"] += 1
+        st = {
+            "symbol":           sym,
+            "initial_capital":  round(init, 2),
+            "final_capital":    round(final, 2),
+            "return_%":         round((final-init)/init*100, 2),
+            "total_trades":     len(trades),
+            "wins":             len(wins),
+            "losses":           len(losses),
+            "win_rate_%":       round(len(wins)/len(trades)*100, 1),
+            "profit_factor":    round(gw/gl, 2),
+            "avg_win_usd":      round(float(np.mean(wins)), 2) if wins else 0,
+            "avg_loss_usd":     round(float(np.mean(losses)), 2) if losses else 0,
+            "best_trade_usd":   round(max(pnls), 2),
+            "worst_trade_usd":  round(min(pnls), 2),
+            "max_drawdown_%":   round(dd, 2),
+            "expectancy_usd":   round(float(np.mean(pnls)), 2),
+            "by_strategy":      by_s,
         }
+        log.info("="*55)
+        log.info(f"  BACKTEST: {sym}")
+        log.info("="*55)
+        for k, v in st.items():
+            if k == "by_strategy":
+                log.info("  Strategy breakdown:")
+                for s2, sd in v.items():
+                    wr = round(sd["wins"]/sd["trades"]*100,1) if sd["trades"] else 0
+                    log.info(f"    {s2:<35} trades={sd['trades']} win%={wr} pnl=${sd['pnl']:.2f}")
+            else:
+                log.info(f"  {k:<30}: {v}")
+        log.info("="*55)
+        return st
 
-        log.info("=" * 60)
-        log.info(f"  BACKTEST: {symbol}")
-        log.info("=" * 60)
-        for k, v in stats.items():
-            if k != "by_strategy":
-                log.info(f"  {k:<28}: {v}")
-        log.info("  Strategy breakdown:")
-        for strat, sd in by_strat.items():
-            wr = round(sd["wins"] / sd["trades"] * 100, 1) if sd["trades"] else 0
-            log.info(f"    {strat:<30}: trades={sd['trades']} win%={wr} pnl=${sd['pnl']:.2f}")
-        log.info("=" * 60)
-        return stats
 
-
-# ---------------------------------------------------------------------------
-# MT5 MANAGER
-# ---------------------------------------------------------------------------
-
-class MT5Manager:
-
-    def __init__(self, cfg: GoldenConfig):
+# ─────────────────────────────────────────────
+#  MT5 CONNECTION MANAGER
+# ─────────────────────────────────────────────
+class MT5Mgr:
+    def __init__(self, cfg: Config):
         self.cfg       = cfg
         self.connected = False
 
     def connect(self) -> bool:
         if not HAS_MT5:
-            log.error("MT5 package not installed")
+            log.error("MetaTrader5 package not installed. Run: pip install MetaTrader5")
             return False
         login    = int(os.environ.get("MT5_LOGIN", "0"))
         password = os.environ.get("MT5_PASSWORD", "")
         server   = os.environ.get("MT5_SERVER", "")
         if login == 0:
-            log.error("MT5_LOGIN not set")
+            log.error("MT5_LOGIN env var not set")
             return False
         if not mt5.initialize():
             log.error(f"mt5.initialize() failed: {mt5.last_error()}")
@@ -2070,344 +1402,305 @@ class MT5Manager:
             mt5.shutdown()
             return False
         acc = mt5.account_info()
-        log.info(f"MT5 connected | Balance={acc.balance:.2f} Equity={acc.equity:.2f}")
+        log.info(f"MT5 connected | Balance={acc.balance:.2f} Equity={acc.equity:.2f} Server={server}")
         self.connected = True
         return True
 
     def ensure(self) -> bool:
-        if not HAS_MT5:
-            return False
-        if mt5.terminal_info() is None:
-            return self.connect()
+        if not HAS_MT5: return False
+        if mt5.terminal_info() is None: return self.connect()
         return True
 
     def equity(self) -> float:
-        if not HAS_MT5 or not self.ensure():
-            return 10_000.0
+        if not HAS_MT5 or not self.ensure(): return 10_000.0
         acc = mt5.account_info()
         return float(acc.equity) if acc else 10_000.0
 
     def disconnect(self):
-        if HAS_MT5:
-            mt5.shutdown()
-            self.connected = False
+        if HAS_MT5: mt5.shutdown()
+        self.connected = False
 
 
-# ---------------------------------------------------------------------------
-# MAIN BOT
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────
+#  MAIN BOT
+# ─────────────────────────────────────────────
+class Bot:
+    def __init__(self, cfg: Optional[Config] = None):
+        self.cfg      = cfg or Config()
+        self.fetcher  = Fetcher(self.cfg)
+        self.news     = News(self.cfg)
+        self.engine   = Engine(self.cfg, self.fetcher, self.news)
+        self.ml       = ML()
+        self.executor = Executor(self.cfg, self.fetcher)
+        self.risk     = Risk(self.cfg)
+        self.logger   = Logger(self.cfg)
+        self.mt5      = MT5Mgr(self.cfg)
 
-class GoldenTradingBot:
-
-    def __init__(self, cfg: Optional[GoldenConfig] = None):
-        self.cfg      = cfg or GoldenConfig()
-        self.fetcher  = DataFetcher(self.cfg)
-        self.news_filter = NewsFilter(self.cfg)
-        self.engine   = GoldenSignalEngine(self.cfg, self.fetcher, self.news_filter)
-        self.ml       = MLFilter(self.cfg)
-        self.executor = TradeExecutor(self.cfg, self.fetcher)
-        self.risk     = RiskManager(self.cfg)
-        self.logger   = TradeLogger(self.cfg)
-        self.mt5      = MT5Manager(self.cfg)
-        self.recent_signals = []
-
-        log.info("GoldenBot v4 initialized")
-        log.info(f"  Symbols      : {self.cfg.symbols}")
-        log.info(f"  Live trading : {self.cfg.live_trading}")
-        log.info(f"  Min score    : {self.cfg.min_score}/10")
-        log.info(f"  RR target    : {self.cfg.tp_rr_ratio}R")
-        log.info(f"  Risk/trade   : {self.cfg.risk_per_trade_pct:.0%}")
+        mode = "LIVE (MT5)" if self.cfg.live_trading else "PAPER (no real money)"
+        print("\n" + "="*60)
+        print(f"  GOLDEN BOT v5  |  Mode: {mode}")
+        print(f"  Symbols : {', '.join(self.cfg.symbols)}")
+        print(f"  Min score: {self.cfg.min_score}/10   RR: {self.cfg.rr_target}R")
+        print(f"  Risk/trade: {self.cfg.risk_pct:.0%}   Max positions: {self.cfg.max_positions}")
+        print("="*60 + "\n")
 
     def setup(self):
         if self.cfg.live_trading:
             if not self.mt5.connect():
-                log.error("MT5 connect failed → paper mode")
+                log.warning("MT5 connect failed → switching to paper mode")
                 self.cfg.live_trading = False
         if self.cfg.use_ml and HAS_SKL:
-            log.info("Training ML models…")
+            log.info("Training ML filters…")
             for sym in self.cfg.symbols:
                 try:
-                    df = self.fetcher.fetch_yf(sym, "1d")
+                    df = self.fetcher.yf(sym, "1d")
                     if not df.empty:
-                        df = Indicators.add_all(df, self.cfg)
+                        df = Ind.compute(df, self.cfg)
                         self.ml.train(sym, df)
                 except Exception as e:
                     log.error(f"ML train {sym}: {e}")
 
-    def process(self, symbol: str, equity: float, n_open: int) -> Optional[TradeSignal]:
+    def process(self, sym: str, equity: float, n_open: int) -> Optional[Signal]:
         use_mt5 = self.cfg.live_trading and HAS_MT5
         ok, reason = self.risk.can_trade(equity, n_open)
         if not ok:
-            log.debug(f"{symbol}: {reason}")
+            log.debug(f"{sym}: {reason}")
             return None
-        if use_mt5 and self.executor.has_position(symbol):
+        if use_mt5 and self.executor.has_position(sym):
             return None
-
-        signal = self.engine.generate(symbol, equity, use_mt5)
-        if signal is None:
-            return None
-
-        if self.cfg.use_ml and symbol in self.ml.models:
-            df15 = self.fetcher.fetch(symbol, self.cfg.entry_tf, use_mt5)
+        sig = self.engine.generate(sym, equity, use_mt5)
+        if sig is None: return None
+        if self.cfg.use_ml and sym in self.ml.models:
+            df15 = self.fetcher.fetch(sym, self.cfg.tf_entry, use_mt5)
             if not df15.empty:
-                df15 = Indicators.add_all(df15, self.cfg)
-                prob = self.ml.predict(symbol, df15, signal.signal.value)
-                signal.ml_probability = prob
+                df15 = Ind.compute(df15, self.cfg)
+                prob = self.ml.predict(sym, df15, sig.direction.value)
+                sig.ml_prob = prob
                 if prob < self.cfg.ml_min_prob:
-                    log.info(f"{symbol}: ML prob {prob:.2f} too low")
+                    log.info(f"{sym}: ML prob {prob:.2f} too low")
                     return None
-
-        self.logger.log_signal(signal)
-        self.recent_signals.append(signal.to_dict())
-        if self.executor.execute(signal):
-            return signal
-        return None
+        self.logger.log_signal(sig)
+        self.executor.execute(sig)
+        return sig
 
     def run(self):
         self.setup()
-        log.info("=" * 60)
-        log.info("  GOLDEN BOT v4 — TRADING LOOP STARTED")
-        log.info("=" * 60)
         loop = 0
-
+        log.info("Trading loop started. Press Ctrl+C to stop.")
         while True:
             try:
                 loop += 1
-                log.info(f"\n--- Loop #{loop} | {datetime.utcnow():%Y-%m-%d %H:%M:%S} UTC ---")
-
-                if self.cfg.live_trading:
-                    self.mt5.ensure()
-
+                log.info(f"\n─── Loop #{loop} | {datetime.utcnow():%Y-%m-%d %H:%M UTC} ───")
+                if self.cfg.live_trading: self.mt5.ensure()
                 eq = self.mt5.equity()
-                self.risk.update(eq)
-
-                if not self.risk.check(eq):
-                    log.warning("⛔ Daily loss limit. Sleeping…")
-                    time.sleep(self.cfg.interval_seconds)
+                self.risk.new_day(eq)
+                ok, reason = self.risk.can_trade(eq, 0)
+                if not ok:
+                    log.warning(f"⛔ {reason}")
+                    time.sleep(self.cfg.interval)
                     continue
-
-                positions = self.executor.get_positions()
-                n_open = len([p for p in positions
-                              if p.get("magic") == self.cfg.mt5_magic])
-
+                positions = self.executor.positions()
+                n_open    = len([p for p in positions if p.get("magic")==self.cfg.mt5_magic])
                 log.info(f"Equity=${eq:.2f} | Open={n_open}/{self.cfg.max_positions}")
-
-                if self.cfg.live_trading:
-                    self.executor.update_trailing_sl()
-
+                if self.cfg.live_trading: self.executor.trail_sl()
                 for sym in self.cfg.symbols:
                     try:
                         self.process(sym, eq, n_open)
                     except Exception as e:
                         log.error(f"Error {sym}: {e}")
-
-                stats = self.logger.get_stats()
-                if stats.get("total_trades", 0) > 0:
+                st = self.logger.stats()
+                if st.get("total", 0) > 0:
                     log.info(
-                        f"Perf | Trades={stats['total_trades']} "
-                        f"WR={stats.get('win_rate_pct', 0)}% "
-                        f"PnL=${stats.get('total_pnl_usd', 0):.2f} "
-                        f"PF={stats.get('profit_factor', 0):.2f}"
+                        f"Stats | Trades={st['total']}  "
+                        f"WR={st.get('win_rate_%',0)}%  "
+                        f"PnL=${st.get('total_pnl_usd',0):.2f}  "
+                        f"PF={st.get('profit_factor',0):.2f}"
                     )
-
-                log.info(f"Sleeping {self.cfg.interval_seconds}s…")
-                time.sleep(self.cfg.interval_seconds)
-
+                log.info(f"Sleeping {self.cfg.interval}s…")
+                time.sleep(self.cfg.interval)
             except KeyboardInterrupt:
-                log.info("KeyboardInterrupt — shutting down")
+                log.info("Stopped by user.")
                 break
             except Exception as e:
                 log.error(f"Loop error: {e}\n{traceback.format_exc()}")
                 time.sleep(30)
-
         self.logger.save()
-        if self.cfg.live_trading:
-            self.mt5.disconnect()
+        if self.cfg.live_trading: self.mt5.disconnect()
 
     def signals_now(self) -> List[dict]:
         eq = self.mt5.equity()
-        results = []
+        out = []
         for sym in self.cfg.symbols:
             sig = self.engine.generate(sym, eq, False)
-            if sig:
-                results.append(sig.to_dict())
-            else:
-                results.append({"symbol": sym, "signal": "HOLD"})
-        return results
+            out.append(sig.to_dict() if sig else {"symbol":sym,"signal":"HOLD"})
+        return out
 
-    def backtest(self, symbol: Optional[str] = None,
-                 capital: float = 10_000.0) -> dict:
-        bt   = GoldenBacktester(self.cfg)
-        syms = [symbol] if symbol else self.cfg.symbols
-        all_results = {}
-        for sym in syms:
-            res = bt.run(sym, initial_capital=capital)
-            if res:
-                all_results[sym] = res
-        return all_results
+    def backtest_all(self, capital=10_000.0) -> dict:
+        bt = Backtest(self.cfg)
+        return {sym: bt.run(sym, capital) for sym in self.cfg.symbols}
 
 
-# ---------------------------------------------------------------------------
-# CONFIG LOADER
-# ---------------------------------------------------------------------------
-
-def load_mt5_config():
-    if not os.path.exists("config"):
-        return
+# ─────────────────────────────────────────────
+#  CONFIG LOADER (reads 'config' file if exists)
+# ─────────────────────────────────────────────
+def load_env_config():
+    if not os.path.exists("config"): return
     try:
-        with open("config") as f:
-            for line in f:
-                if "=" in line:
-                    k, v = line.strip().split("=", 1)
-                    k = k.strip().upper()
-                    v = v.strip().strip('"').strip("'")
-                    if k == "LOGIN":
-                        os.environ["MT5_LOGIN"] = v
-                    elif k == "PASSWORD":
-                        os.environ["MT5_PASSWORD"] = v
-                    elif k == "SERVER":
-                        os.environ["MT5_SERVER"] = v
+        for line in open("config"):
+            if "=" in line:
+                k, v = line.strip().split("=", 1)
+                k = k.strip().upper()
+                v = v.strip().strip('"').strip("'")
+                if k == "LOGIN":    os.environ["MT5_LOGIN"]    = v
+                if k == "PASSWORD": os.environ["MT5_PASSWORD"] = v
+                if k == "SERVER":   os.environ["MT5_SERVER"]   = v
     except Exception as e:
-        log.error(f"Config load error: {e}")
+        log.error(f"Config file error: {e}")
 
 
-# ---------------------------------------------------------------------------
-# ENTRY POINT
-# ---------------------------------------------------------------------------
-
+# ─────────────────────────────────────────────
+#  ENTRY POINT
+# ─────────────────────────────────────────────
 def main():
-    load_mt5_config()
+    load_env_config()
 
-    cfg = GoldenConfig(
-        symbols=[
-            "EURUSD", "GBPUSD", "USDJPY", "AUDUSD",
-        ],
-        mt5_symbol_suffix="m",
+    cfg = Config(
+        symbols     = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"],
+        mt5_suffix  = "",          # change to "m" if your broker adds suffix
 
-        # Timeframes
-        trend_tf="1h",
-        entry_tf="15m",
-        confirm_tf="4h",
+        tf_entry    = "15m",
+        tf_trend    = "1h",
+        tf_confirm  = "4h",
 
-        # Strategy 1 thresholds
-        ema_50=50,
-        ema_200=200,
-        rsi_pullback_min=40.0,
-        rsi_pullback_max=55.0,
+        # ── Tighter signal quality ───────────
+        min_score   = 6.0,         # was 5.5 — now stricter
+        w1=0.35, w2=0.30, w3=0.35,
 
-        # Strategy 2 thresholds
-        bb_period=20,
-        bb_std=2.0,
-        stoch_overbought=80.0,
-        stoch_oversold=20.0,
+        # ── Risk: very conservative ──────────
+        risk_pct          = 0.01,  # 1% per trade
+        sl_atr_mult       = 2.0,
+        rr_target         = 2.5,
+        rr_min            = 2.0,
+        max_positions     = 3,
+        daily_loss_limit  = 0.03,  # 3% daily stop
+        consec_loss_limit = 3,     # pause after 3 losses in a row
+        lot_min           = 0.01,
+        lot_max           = 0.10,
 
-        # Strategy 3 thresholds
-        divergence_lookback=30,
-        sr_lookback=50,
-        sr_tolerance_pct=0.003,
-        pin_bar_ratio=0.6,
+        # ── Sessions ─────────────────────────
+        sessions    = [(7, 16), (13, 22)],   # London + NY sessions
 
-        # Signal quality (raise this for higher accuracy, fewer trades)
-        min_score=5.5,   # out of 10
-        s1_weight=0.35,
-        s2_weight=0.30,
-        s3_weight=0.35,
+        # ── News filter ──────────────────────
+        news_enabled = True,
+        finnhub_key  = "",    # get free key at https://finnhub.io
 
-        # Risk
-        risk_per_trade_pct=0.01,
-        sl_atr_multiplier=1.5,
-        tp_rr_ratio=2.5,       # 2.5R target
-        min_rr_ratio=2.0,
-        max_positions=3,
-        max_daily_loss_pct=0.03,
-        lot_min=0.01,
-        lot_max=0.10,
+        # ── ML (off by default) ──────────────
+        use_ml       = False,
+        ml_min_prob  = 0.65,
 
-        # Execution
-        live_trading=True,    # Set True + MT5 env vars for live
-        spread_max_pips=50.0,
+        # ────────────────────────────────────
+        #  ⚠️  LIVE TRADING OFF BY DEFAULT
+        #  To enable: set live_trading=True AND set these env vars:
+        #    export MT5_LOGIN=<your_account_number>
+        #    export MT5_PASSWORD=<your_password>
+        #    export MT5_SERVER=<your_broker_server>
+        #
+        #  Only enable after 2+ weeks of paper results show consistent profit.
+        # ────────────────────────────────────
+        live_trading = False,
 
-        # Sessions
-        trade_sessions=[(0, 24)],   # 24/7 for testing; set to [(7,16),(13,22)] for sessions
-
-        # ML
-        use_ml=True,
-        ml_min_prob=0.60,
-
-        interval_seconds=60,
+        interval     = 60,
     )
 
     args = sys.argv[1:]
 
+    # ── --live flag overrides config ────────
+    if "--live" in args:
+        print("\n" + "!"*60)
+        print("  WARNING: You are switching to LIVE trading mode.")
+        print("  Real money will be used. Losses are real.")
+        print("  Only continue if you have tested this in paper mode")
+        print("  for at least 2 weeks with positive results.")
+        print("!"*60)
+        confirm = input("\n  Type 'YES I UNDERSTAND' to continue: ").strip()
+        if confirm != "YES I UNDERSTAND":
+            print("  Cancelled. Running in paper mode instead.")
+        else:
+            cfg.live_trading = True
+
+    # ── --paper flag (explicit paper mode) ──
+    if "--paper" in args:
+        cfg.live_trading = False
+
+    # ── Run modes ───────────────────────────
     if "--backtest" in args:
-        print("\n" + "=" * 65)
-        print("  GOLDEN BOT v4 — BACKTEST MODE")
-        print("=" * 65)
-        bot     = GoldenTradingBot(cfg)
-        results = bot.backtest(capital=10_000.0)
+        print("\n" + "="*60)
+        print("  BACKTEST MODE")
+        print("="*60)
+        bot = Bot(cfg)
+        results = bot.backtest_all(capital=10_000.0)
         for sym, res in results.items():
-            print(f"\n{'=' * 40}")
+            print(f"\n{'─'*50}")
             print(f"  {sym}")
-            print(f"{'=' * 40}")
+            print(f"{'─'*50}")
             for k, v in res.items():
                 if k == "by_strategy":
-                    print(f"  Strategy breakdown:")
-                    for strat, sd in v.items():
-                        wr = round(sd["wins"] / sd["trades"] * 100, 1) if sd["trades"] else 0
-                        print(f"    {strat:<35} trades={sd['trades']} win%={wr} pnl=${sd['pnl']:.2f}")
+                    print("  By strategy:")
+                    for s, sd in v.items():
+                        wr = round(sd["wins"]/sd["trades"]*100,1) if sd["trades"] else 0
+                        print(f"    {s:<35} trades={sd['trades']} win%={wr} pnl=${sd['pnl']:.2f}")
                 else:
-                    print(f"  {k:<30}: {v}")
+                    print(f"  {k:<28}: {v}")
 
     elif "--signal" in args:
-        print("\n" + "=" * 65)
-        print("  GOLDEN BOT v4 — CURRENT SIGNALS")
-        print("=" * 65)
-        bot     = GoldenTradingBot(cfg)
+        print("\n" + "="*60)
+        print("  CURRENT SIGNALS  (scan once and exit)")
+        print("="*60)
+        bot     = Bot(cfg)
         signals = bot.signals_now()
+        found   = False
         for sig in signals:
-            sym = sig.get("symbol", "?")
-            s   = sig.get("signal", "HOLD")
-            if hasattr(s, "value"):
-                s = s.value
-            if s in ("BUY", "SELL"):
-                print(f"\n  {'▲' if s == 'BUY' else '▼'} {sym}: {s}")
-                print(f"    Entry={sig.get('entry_price')} "
-                      f"SL={sig.get('stop_loss')} "
-                      f"TP={sig.get('take_profit')} "
-                      f"RR={sig.get('rr_ratio')}")
-                print(f"    Score={sig.get('score_combined', 0):.1f}/10")
-                print(f"    {sig.get('reason', '')[:200]}")
+            sym = sig.get("symbol","?")
+            d   = sig.get("signal","HOLD")
+            if hasattr(d, "value"): d = d.value
+            if d in ("BUY","SELL"):
+                found = True
+                arrow = "▲" if d == "BUY" else "▼"
+                print(f"\n  {arrow} {d} {sym}")
+                print(f"    Entry  : {sig.get('entry')}")
+                print(f"    SL     : {sig.get('sl')}")
+                print(f"    TP     : {sig.get('tp')}")
+                print(f"    RR     : 1:{sig.get('rr')}")
+                print(f"    Score  : {sig.get('score_combined',0):.1f}/10")
             else:
-                print(f"  ─ {sym}: HOLD")
+                print(f"  ─  HOLD {sym}")
+        if not found:
+            print("\n  No high-quality signals right now. Wait for better setups.")
 
     elif "--stats" in args:
-        bot   = GoldenTradingBot(cfg)
-        stats = bot.logger.get_stats()
-        print("\n" + "=" * 65)
-        print("  GOLDEN BOT v4 — PERFORMANCE STATS")
-        print("=" * 65)
-        for k, v in stats.items():
+        bot = Bot(cfg)
+        st  = bot.logger.stats()
+        print("\n" + "="*60)
+        print("  PERFORMANCE STATS")
+        print("="*60)
+        for k, v in st.items():
             if k == "by_strategy":
                 print("  By strategy:")
-                for strat, sd in v.items():
-                    print(f"    {strat}: {sd}")
+                for s, sd in v.items(): print(f"    {s}: {sd}")
             else:
-                print(f"  {k:<30}: {v}")
+                print(f"  {k:<28}: {v}")
 
     else:
-        print("\n" + "=" * 65)
-        print("  GOLDEN BOT v4 — TRADING LOOP")
-        print(f"  Mode: {'LIVE (MT5)' if cfg.live_trading else 'PAPER'}")
-        print("=" * 65)
-        print("\n  Run modes:")
-        print("    python golden_strategy_bot.py --backtest")
-        print("    python golden_strategy_bot.py --signal")
-        print("    python golden_strategy_bot.py --stats")
-        print("\n  For live MT5 trading set cfg.live_trading=True and:")
-        print("    export MT5_LOGIN=<account>")
-        print("    export MT5_PASSWORD=<password>")
-        print("    export MT5_SERVER=<broker_server>\n")
-        bot = GoldenTradingBot(cfg)
+        # Default: paper trading loop
+        cfg.live_trading = False   # safety: paper unless --live explicitly confirmed
+        print("\n  No mode specified. Running in PAPER mode (safe).")
+        print("  Available modes:")
+        print("    python golden_bot_v5.py --paper      ← safe, paper trading loop")
+        print("    python golden_bot_v5.py --signal     ← scan once, print signals")
+        print("    python golden_bot_v5.py --backtest   ← historical test")
+        print("    python golden_bot_v5.py --stats      ← show trade journal")
+        print("    python golden_bot_v5.py --live       ← REAL MONEY (MT5 required)\n")
+        bot = Bot(cfg)
         bot.run()
 
 

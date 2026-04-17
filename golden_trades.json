@@ -727,5 +727,235 @@
     "ml_probability": 0.5,
     "score_combined": 5.924999999999999,
     "type": "signal"
+  },
+  {
+    "symbol": "EURUSD",
+    "signal": "BUY",
+    "entry_price": 1.1814,
+    "stop_loss": 1.17904,
+    "take_profit": 1.18731,
+    "sl_distance": 0.00236,
+    "tp_distance": 0.00591,
+    "rr_ratio": 2.5,
+    "lots": 0.01,
+    "confidence": 0.551,
+    "score": {
+      "s1_score": 8.0,
+      "s2_score": 3.5,
+      "s3_score": 4.75,
+      "s1_reasons": [
+        "\u2705 Golden Cross (EMA50 > EMA200)",
+        "\u2705 Price above EMA50",
+        "\u2705 EMA9 > EMA21",
+        "\u26a0\ufe0f RSI at 57.9 (borderline zone)",
+        "\u2705 RSI 57.9 not overbought",
+        "\u2705 ADX=40.2 (strong trend)",
+        "\u2705 Volume ratio=1.02x"
+      ],
+      "s2_reasons": [
+        "\u26a0\ufe0f Price near lower BB",
+        "\u2705 Pin bar (bullish reversal candle)",
+        "\u2705 BB widening (volatility expanding)"
+      ],
+      "s3_reasons": [
+        "\u2705 Price at support level (1.17875)",
+        "\u2705 Bullish pin bar at support",
+        "\u2705 RSI=57.9 has room to run"
+      ]
+    },
+    "strategy": "S1_GoldenCross",
+    "rsi": 57.91,
+    "macd_hist": -0.000136,
+    "atr": 0.00124,
+    "spread_pips": 0.8,
+    "reason": "Trend=BUY Macro=BUY | FinalScore=5.51 (Tech=5.51, News=-0.0) | DominantStrategy=S1_GoldenCross\n    [S1-GoldenCross] \u2705 Golden Cross (EMA50 > EMA200)\n    [S1-GoldenCross] \u2705 Price above EMA50\n    [S1-GoldenCross] \u2705 EMA9 > EMA21\n    [S1-GoldenCross] \u26a0\ufe0f RSI at 57.9 (borderline zone)\n    [S1-GoldenCross] \u2705 RSI 57.9 not overbought\n    [S1-GoldenCross] \u2705 ADX=40.2 (strong trend)\n    [S1-GoldenCross] \u2705 Volume ratio=1.02x\n    [S2-MeanRev]     \u26a0\ufe0f Price near lower BB\n    [S2-MeanRev]     \u2705 Pin bar (bullish reversal candle)\n    [S2-MeanRev]     \u2705 BB widening (volatility expanding)\n    [S3-Divergence]  \u2705 Price at support level (1.17875)\n    [S3-Divergence]  \u2705 Bullish pin bar at support\n    [S3-Divergence]  \u2705 RSI=57.9 has room to run",
+    "timestamp": "2026-04-17T20:40:06.371724",
+    "ml_probability": 0.5,
+    "score_combined": 5.512499999999999,
+    "type": "signal"
+  },
+  {
+    "symbol": "GBPUSD",
+    "signal": "BUY",
+    "entry_price": 1.35549,
+    "stop_loss": 1.35367,
+    "take_profit": 1.36005,
+    "sl_distance": 0.00182,
+    "tp_distance": 0.00456,
+    "rr_ratio": 2.5,
+    "lots": 0.01,
+    "confidence": 0.615,
+    "score": {
+      "s1_score": 6.5,
+      "s2_score": 6.5,
+      "s3_score": 5.5,
+      "s1_reasons": [
+        "\u2705 Golden Cross (EMA50 > EMA200)",
+        "\u2705 Price above EMA50",
+        "\u2705 EMA9 > EMA21",
+        "\u2705 RSI 31.1 not overbought",
+        "\u2705 ADX=30.8 (strong trend)"
+      ],
+      "s2_reasons": [
+        "\u26a0\ufe0f Price near lower BB",
+        "\u2705 Stoch K=19.9 oversold",
+        "\u2705 RSI=31.1 oversold (<35)",
+        "\u2705 Bullish engulfing candle",
+        "\u2705 BB widening (volatility expanding)"
+      ],
+      "s3_reasons": [
+        "\u2705 Price at support level (1.35473)",
+        "\u2705 Bullish engulfing at support",
+        "\u2705 MACD histogram turning UP (momentum shift)",
+        "\u2705 RSI=31.1 has room to run"
+      ]
+    },
+    "strategy": "S1_GoldenCross",
+    "rsi": 31.07,
+    "macd_hist": -0.000347,
+    "atr": 0.00122,
+    "spread_pips": 1.0,
+    "reason": "Trend=BUY Macro=BUY | FinalScore=6.15 (Tech=6.15, News=-0.0) | DominantStrategy=S1_GoldenCross\n    [S1-GoldenCross] \u2705 Golden Cross (EMA50 > EMA200)\n    [S1-GoldenCross] \u2705 Price above EMA50\n    [S1-GoldenCross] \u2705 EMA9 > EMA21\n    [S1-GoldenCross] \u2705 RSI 31.1 not overbought\n    [S1-GoldenCross] \u2705 ADX=30.8 (strong trend)\n    [S2-MeanRev]     \u26a0\ufe0f Price near lower BB\n    [S2-MeanRev]     \u2705 Stoch K=19.9 oversold\n    [S2-MeanRev]     \u2705 RSI=31.1 oversold (<35)\n    [S2-MeanRev]     \u2705 Bullish engulfing candle\n    [S2-MeanRev]     \u2705 BB widening (volatility expanding)\n    [S3-Divergence]  \u2705 Price at support level (1.35473)\n    [S3-Divergence]  \u2705 Bullish engulfing at support\n    [S3-Divergence]  \u2705 MACD histogram turning UP (momentum shift)\n    [S3-Divergence]  \u2705 RSI=31.1 has room to run",
+    "timestamp": "2026-04-17T21:51:26.583847",
+    "ml_probability": 0.5,
+    "score_combined": 6.1499999999999995,
+    "type": "signal"
+  },
+  {
+    "symbol": "AUDUSD",
+    "signal": "BUY",
+    "entry_price": 0.71918,
+    "stop_loss": 0.71798,
+    "take_profit": 0.72218,
+    "sl_distance": 0.0012,
+    "tp_distance": 0.003,
+    "rr_ratio": 2.5,
+    "lots": 0.01,
+    "confidence": 0.57,
+    "score": {
+      "s1_score": 6.5,
+      "s2_score": 5.0,
+      "s3_score": 5.5,
+      "s1_reasons": [
+        "\u2705 Golden Cross (EMA50 > EMA200)",
+        "\u2705 Price above EMA50",
+        "\u2705 EMA9 > EMA21",
+        "\u2705 RSI 33.9 not overbought",
+        "\u2705 ADX=31.1 (strong trend)"
+      ],
+      "s2_reasons": [
+        "\u26a0\ufe0f Price near lower BB",
+        "\u2705 RSI=33.9 oversold (<35)",
+        "\u2705 Bullish engulfing candle",
+        "\u2705 BB widening (volatility expanding)"
+      ],
+      "s3_reasons": [
+        "\u2705 Price at support level (0.72022)",
+        "\u2705 Bullish engulfing at support",
+        "\u2705 MACD histogram turning UP (momentum shift)",
+        "\u2705 RSI=33.9 has room to run"
+      ]
+    },
+    "strategy": "S1_GoldenCross",
+    "rsi": 33.9,
+    "macd_hist": -0.000254,
+    "atr": 0.0008,
+    "spread_pips": 0.9,
+    "reason": "Trend=BUY Macro=BUY | FinalScore=5.70 (Tech=5.70, News=-0.0) | DominantStrategy=S1_GoldenCross\n    [S1-GoldenCross] \u2705 Golden Cross (EMA50 > EMA200)\n    [S1-GoldenCross] \u2705 Price above EMA50\n    [S1-GoldenCross] \u2705 EMA9 > EMA21\n    [S1-GoldenCross] \u2705 RSI 33.9 not overbought\n    [S1-GoldenCross] \u2705 ADX=31.1 (strong trend)\n    [S2-MeanRev]     \u26a0\ufe0f Price near lower BB\n    [S2-MeanRev]     \u2705 RSI=33.9 oversold (<35)\n    [S2-MeanRev]     \u2705 Bullish engulfing candle\n    [S2-MeanRev]     \u2705 BB widening (volatility expanding)\n    [S3-Divergence]  \u2705 Price at support level (0.72022)\n    [S3-Divergence]  \u2705 Bullish engulfing at support\n    [S3-Divergence]  \u2705 MACD histogram turning UP (momentum shift)\n    [S3-Divergence]  \u2705 RSI=33.9 has room to run",
+    "timestamp": "2026-04-17T21:51:27.044477",
+    "ml_probability": 0.5,
+    "score_combined": 5.699999999999999,
+    "type": "signal"
+  },
+  {
+    "symbol": "USDJPY",
+    "signal": "SELL",
+    "entry_price": 158.149,
+    "stop_loss": 158.3754,
+    "take_profit": 157.58301,
+    "sl_distance": 0.2264,
+    "tp_distance": 0.56599,
+    "rr_ratio": 2.5,
+    "lots": 0.01,
+    "confidence": 0.62,
+    "score": {
+      "s1_score": 7.5,
+      "s2_score": 5.5,
+      "s3_score": 5.5,
+      "s1_reasons": [
+        "\u2705 Death Cross (EMA50 < EMA200)",
+        "\u2705 Price below EMA50",
+        "\u2705 EMA9 < EMA21",
+        "\u26a0\ufe0f RSI 59.9 in sell zone",
+        "\u2705 RSI 59.9 not oversold",
+        "\u2705 ADX=29.4 (strong downtrend)"
+      ],
+      "s2_reasons": [
+        "\u2705 Price touching upper BB (0.18% away)",
+        "\u2705 Stoch K=91.9 overbought",
+        "\u2705 Bearish engulfing candle"
+      ],
+      "s3_reasons": [
+        "\u2705 Price at resistance level (158.19700)",
+        "\u2705 Bearish engulfing at resistance",
+        "\u2705 MACD histogram turning DOWN",
+        "\u2705 RSI=59.9 has room to fall"
+      ]
+    },
+    "strategy": "S1_GoldenCross",
+    "rsi": 59.86,
+    "macd_hist": 0.060505,
+    "atr": 0.15093,
+    "spread_pips": 1.0,
+    "reason": "Trend=SELL Macro=None | FinalScore=6.20 (Tech=6.20, News=-0.0) | DominantStrategy=S1_GoldenCross\n    [S1-GoldenCross] \u2705 Death Cross (EMA50 < EMA200)\n    [S1-GoldenCross] \u2705 Price below EMA50\n    [S1-GoldenCross] \u2705 EMA9 < EMA21\n    [S1-GoldenCross] \u26a0\ufe0f RSI 59.9 in sell zone\n    [S1-GoldenCross] \u2705 RSI 59.9 not oversold\n    [S1-GoldenCross] \u2705 ADX=29.4 (strong downtrend)\n    [S2-MeanRev]     \u2705 Price touching upper BB (0.18% away)\n    [S2-MeanRev]     \u2705 Stoch K=91.9 overbought\n    [S2-MeanRev]     \u2705 Bearish engulfing candle\n    [S3-Divergence]  \u2705 Price at resistance level (158.19700)\n    [S3-Divergence]  \u2705 Bearish engulfing at resistance\n    [S3-Divergence]  \u2705 MACD histogram turning DOWN\n    [S3-Divergence]  \u2705 RSI=59.9 has room to fall",
+    "timestamp": "2026-04-17T23:19:30.365976",
+    "ml_probability": 0.5,
+    "score_combined": 6.2,
+    "type": "signal"
+  },
+  {
+    "symbol": "AUDUSD",
+    "signal": "BUY",
+    "entry_price": 0.71837,
+    "stop_loss": 0.71736,
+    "take_profit": 0.7209,
+    "sl_distance": 0.00101,
+    "tp_distance": 0.00253,
+    "rr_ratio": 2.5,
+    "lots": 0.02,
+    "confidence": 0.625,
+    "score": {
+      "s1_score": 5.5,
+      "s2_score": 8.0,
+      "s3_score": 5.5,
+      "s1_reasons": [
+        "\u2705 Golden Cross (EMA50 > EMA200)",
+        "\u2705 Price above EMA50",
+        "\u2705 RSI 18.4 not overbought",
+        "\u2705 ADX=31.2 (strong trend)"
+      ],
+      "s2_reasons": [
+        "\u2705 Price touching lower BB (0.17% away)",
+        "\u2705 Stoch K=14.1 oversold + crossing UP \u2191",
+        "\u2705 RSI=18.4 oversold (<35)",
+        "\u2705 Bullish engulfing candle"
+      ],
+      "s3_reasons": [
+        "\u2705 Price at support level (0.71918)",
+        "\u2705 Bullish engulfing at support",
+        "\u2705 MACD histogram turning UP (momentum shift)",
+        "\u2705 RSI=18.4 has room to run"
+      ]
+    },
+    "strategy": "S2_MeanReversion",
+    "rsi": 18.41,
+    "macd_hist": -0.000268,
+    "atr": 0.00067,
+    "spread_pips": 0.9,
+    "reason": "Trend=BUY Macro=BUY | FinalScore=6.25 (Tech=6.25, News=-0.0) | DominantStrategy=S2_MeanReversion\n    [S1-GoldenCross] \u2705 Golden Cross (EMA50 > EMA200)\n    [S1-GoldenCross] \u2705 Price above EMA50\n    [S1-GoldenCross] \u2705 RSI 18.4 not overbought\n    [S1-GoldenCross] \u2705 ADX=31.2 (strong trend)\n    [S2-MeanRev]     \u2705 Price touching lower BB (0.17% away)\n    [S2-MeanRev]     \u2705 Stoch K=14.1 oversold + crossing UP \u2191\n    [S2-MeanRev]     \u2705 RSI=18.4 oversold (<35)\n    [S2-MeanRev]     \u2705 Bullish engulfing candle\n    [S3-Divergence]  \u2705 Price at support level (0.71918)\n    [S3-Divergence]  \u2705 Bullish engulfing at support\n    [S3-Divergence]  \u2705 MACD histogram turning UP (momentum shift)\n    [S3-Divergence]  \u2705 RSI=18.4 has room to run",
+    "timestamp": "2026-04-17T23:19:30.592785",
+    "ml_probability": 0.5,
+    "score_combined": 6.249999999999999,
+    "type": "signal"
   }
 ]
