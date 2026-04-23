@@ -26,8 +26,10 @@ import argparse
 import logging
 import warnings
 import joblib
-from datetime import date
-from typing import Optional, Tuple, Dict
+import requests
+import csv
+from datetime import date, datetime, timedelta, timezone
+from typing import Optional, Tuple, Dict, List
 
 import numpy as np
 import pandas as pd
@@ -85,16 +87,24 @@ class Config:
     MAX_DAILY_TRADES   = 10     # max orders per day
     MAX_DAILY_LOSS_PCT = 3.0    # daily loss cap (% of balance)
 
-    # ── Trade Execution ───────────────────────────────────────
-    SL_PIPS      = 30     # stop-loss in pips
-    TP_PIPS      = 60     # take-profit in pips (2:1 reward:risk)
+    # ── Trade Execution (Dynamic SL/TP) ───────────────────────
+    ATR_SL_MULT  = 1.5   # Stop Loss = 1.5 * ATR
+    ATR_TP_MULT  = 3.0   # Take Profit = 3.0 * ATR (2:1 Reward Ratio)
+    TRAILING_SL  = True  # Enable Trailing Stop Loss
+    
     DEFAULT_LOT  = 0.01   # fallback lot size
     MAX_LOT      = 0.05   # hard cap per trade
+
+    # ── News Filter ───────────────────────────────────────────
+    USE_NEWS_FILTER  = True
+    NEWS_URL         = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+    NEWS_BUFFER_MINS = 30  # Stop trading 30m before/after high impact news
 
     # ── ML Settings ───────────────────────────────────────────
     ML_LOOKBACK             = 20    # feature window (bars)
     ML_CONFIDENCE_THRESHOLD = 0.60  # min confidence to act on ML signal
     ML_RETRAIN_CANDLES      = 1000  # retrain when this many new candles seen
+    LOG_FILE_TRADES         = "trade_logs.csv"
 
     # ── Bot Loop ──────────────────────────────────────────────
     LOOP_INTERVAL = 60    # seconds between each market scan
@@ -165,6 +175,9 @@ class TechnicalAnalysis:
         h, l, c = df["High"], df["Low"], df["Close"]
         tr = pd.concat([h-l, (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
         return tr.ewm(span=n, adjust=False).mean()
+
+    def get_atr(self, df: pd.DataFrame, n=14) -> float:
+        return self._atr(df, n).iloc[-1]
 
     @staticmethod
     def _adx(df: pd.DataFrame, n=14) -> pd.Series:
@@ -365,9 +378,10 @@ class CandlePredictor:
         for span in [10, 20, 50]:
             f[f"d_ema{span}"] = (c - c.ewm(span=span, adjust=False).mean()) / c
 
-        # Volume
-        f["vol_ratio"] = v / v.rolling(20).mean()
-        f["vol_slope"] = f["vol_ratio"].diff(3)
+        # Volume Refinement
+        f["vol_roc"]   = v.pct_change(3)  # Rate of Change
+        f["rvol"]      = v / v.rolling(20).mean()  # Relative Volume
+        f["vol_slope"] = f["rvol"].diff(3)
 
         # Candle patterns
         f["doji"]           = (f["body"].abs() < 0.1).astype(int)
@@ -532,6 +546,77 @@ class RiskManager:
 
 
 # ══════════════════════════════════════════════════════════════
+#  SECTION 4.5 — NEWS FILTER
+# ══════════════════════════════════════════════════════════════
+class NewsFilter:
+    """
+    Checks for high-impact economic news from Forex Factory (unofficial JSON).
+    Prevents trading within a buffer window around news events.
+    """
+    def __init__(self):
+        self.news_events = []
+        self.last_update = datetime.min.replace(tzinfo=timezone.utc)
+
+    def update_news(self):
+        """Fetches the latest news if more than 6 hours since last update."""
+        now = datetime.now(timezone.utc)
+        if (now - self.last_update).total_seconds() < 21600: # 6 hours
+            return
+
+        try:
+            log.info("Updating economic calendar...")
+            res = requests.get(Config.NEWS_URL, timeout=10)
+            if res.status_code == 200:
+                self.news_events = res.json()
+                self.last_update = now
+                log.info("News calendar updated. %d events found.", len(self.news_events))
+        except Exception as e:
+            log.error("Failed to update news: %s", e)
+
+    def is_news_time(self, symbol: str) -> bool:
+        """Returns True if high-impact news is nearby for relevant currencies."""
+        if not Config.USE_NEWS_FILTER:
+            return False
+
+        self.update_news()
+        now = datetime.now(timezone.utc)
+        buffer = timedelta(minutes=Config.NEWS_BUFFER_MINS)
+
+        # Identify relevant currencies for this symbol (e.g. EURUSD -> EUR, USD)
+        currencies = [symbol[:3], symbol[3:6]]
+        
+        for event in self.news_events:
+            if event.get('impact') != 'High':
+                continue
+            
+            event_curr = event.get('country') # In FF JSON, 'country' is often the currency code
+            if event_curr not in currencies:
+                continue
+
+            try:
+                # FF JSON date format example: "2024-05-23T12:30:00-04:00"
+                # But some formats differ. We'll try common ones.
+                date_str = event.get('date')
+                if not date_str: continue
+                
+                # Replace Z with +00:00 for fromisoformat
+                if date_str.endswith('Z'): date_str = date_str[:-1] + '+00:00'
+                event_time = datetime.fromisoformat(date_str)
+                
+                if event_time.tzinfo is None:
+                    event_time = event_time.replace(tzinfo=timezone.utc)
+
+                if (event_time - buffer) <= now <= (event_time + buffer):
+                    log.warning("Trading blocked by News: %s (%s) at %s", 
+                                event.get('title'), event_curr, date_str)
+                    return True
+            except Exception as e:
+                # log.debug("News date parse error: %s", e)
+                continue
+
+        return False
+
+# ══════════════════════════════════════════════════════════════
 #  SECTION 5 — MAIN TRADING BOT
 # ══════════════════════════════════════════════════════════════
 class ForexBot:
@@ -552,9 +637,16 @@ class ForexBot:
         self.ta        = TechnicalAnalysis()
         self.ml        = CandlePredictor(Config.ML_LOOKBACK)
         self.risk      = RiskManager()
+        self.news      = NewsFilter()
         self.running   = False
         self.eq_start  = 0.0
         self.symbol_map: Dict[str, str] = {}
+        
+        # Initialize log file with header if not exists
+        if not os.path.exists(Config.LOG_FILE_TRADES):
+            with open(Config.LOG_FILE_TRADES, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["Timestamp", "Symbol", "Action", "Confidence", "TA_Signal", "ML_Signal", "ATR", "Actual_Close"])
 
     # ── MT5 Connection ────────────────────────────────────────
     def _connect(self) -> bool:
@@ -639,11 +731,15 @@ class ForexBot:
 
         return sig, ta_sig, ml_sig, ml_con, ta_det
 
-    def _signal(self, sym: str) -> Tuple[str, float]:
+    def _signal(self, sym: str) -> Tuple[str, float, str, str, float]:
+        # News Filter Check
+        if self.news.is_news_time(sym):
+            return "HOLD", 0.0, "HOLD", "HOLD", 0.0
+
         # Entry timeframe data
         df = self._candles(sym, Config.TIMEFRAME, Config.DATA_HISTORY)
         if df is None or len(df) < 100:
-            return "HOLD", 0.0
+            return "HOLD", 0.0, "HOLD", "HOLD", 0.0
 
         # Trend timeframe data
         trend = "NEUTRAL"
@@ -652,78 +748,81 @@ class ForexBot:
             trend = self.ta.get_trend_direction(df_trend)
 
         sig, ta_sig, ml_sig, ml_con, ta_det = self._combine_signal_from_df(df, sym, trend)
+        atr = self.ta.get_atr(df)
 
-        log.info("[%s] Trend=%s | TA=%s(B:%d/S:%d) | ML=%s(%.0f%%) | FINAL=%s",
-                 sym,
-                 trend,
-                 ta_sig,
-                 ta_det.get("buy_votes", 0),
-                 ta_det.get("sell_votes", 0),
-                 ml_sig,
-                 ml_con * 100,
-                 sig)
+        log.info("[%s] Trend=%s | TA=%s(B:%d/S:%d) | ML=%s(%.0f%%) | ATR=%.5f | FINAL=%s",
+                 sym, trend, ta_sig, ta_det.get("buy_votes", 0),
+                 ta_det.get("sell_votes", 0), ml_sig, ml_con * 100, atr, sig)
 
-        return sig, ml_con
+        return sig, ml_con, ta_sig, ml_sig, atr
 
     # ── Order Execution ───────────────────────────────────────
-    def _lot(self, sym: str, confidence: float = 0.0) -> float:
+    def _lot(self, sym: str, sl_points: int, confidence: float = 0.0) -> float:
         broker_sym = self._broker_symbol(sym)
         acc = mt5.account_info()
         si = mt5.symbol_info(broker_sym)
-        if acc is None or si is None:
+        if acc is None or si is None or sl_points <= 0:
             return Config.DEFAULT_LOT
 
-        pip_val = si.trade_tick_value
-        tick = si.trade_tick_size
-        lot = self.risk.lot_size(
-            acc.balance,
-            Config.SL_PIPS,
-            pip_val / tick * 0.0001,
-            si.volume_min,
-            si.volume_max,
-            confidence,
-        )
+        # Risk amount in account currency
+        risk_amount = acc.balance * (Config.RISK_PCT / 100)
+        
+        # Calculate lot size based on SL points and tick value
+        # Lot = Risk / (SL_Points * TickValue)
+        tick_val = si.trade_tick_value
+        if tick_val <= 0: return Config.DEFAULT_LOT
+        
+        # If SL is in points, we need to know how much 1 point is worth for 1 lot
+        # Risk = Lot * (SL_Points / TickSize) * TickValue
+        # Lot = Risk / ((SL_Points / TickSize) * TickValue)
+        lot = risk_amount / ((sl_points / si.trade_tick_size) * tick_val)
 
-        # Margin-aware clamp: reduce lot if required margin exceeds free margin.
+        # Margin-aware clamp
         step = si.volume_step if si.volume_step and si.volume_step > 0 else 0.01
         decimals = max(0, len(str(step).split(".")[-1].rstrip("0")))
+        lot = round(max(si.volume_min, min(lot, si.volume_max, Config.MAX_LOT)), decimals)
+        
         _, ask = self._price(sym)
         free_margin = getattr(acc, "margin_free", 0.0)
         while lot >= si.volume_min:
             margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, broker_sym, lot, ask)
-            if margin is None:
-                break
-            if free_margin <= 0 or margin <= free_margin * 0.9:
-                return round(lot, 2)
+            if margin is None: break
+            if free_margin > 0 and margin <= free_margin * 0.9:
+                return lot
             lot = round(lot - step, decimals)
 
-        return round(max(si.volume_min, min(Config.DEFAULT_LOT, Config.MAX_LOT)), 2)
+        return si.volume_min
 
-    def _build_order_request(self, sym: str, side: str, lot: float) -> Optional[dict]:
+    def _build_order_request(self, sym: str, side: str, lot: float, atr: float = 0.0) -> Optional[dict]:
         broker_sym = self._broker_symbol(sym)
         si = mt5.symbol_info(broker_sym)
-        if si is None:
-            return None
+        if si is None: return None
         bid, ask = self._price(sym)
         pt = si.point
 
-        if broker_sym.startswith(("XAU", "XAG")):
-            pip_to_point = 10
+        # Dynamic SL/TP based on ATR
+        if atr > 0:
+            sl_dist = atr * Config.ATR_SL_MULT
+            tp_dist = atr * Config.ATR_TP_MULT
         else:
-            pip_to_point = 10 if si.digits in (3, 5) else 1
-        min_stop_points = max(int(si.trade_stops_level) + 5, 1)
-        sl_points = max(Config.SL_PIPS * pip_to_point, min_stop_points)
-        tp_points = max(Config.TP_PIPS * pip_to_point, min_stop_points)
+            # Fallback to points if ATR is missing (e.g. 30 pips)
+            pip_size = 10 * pt if si.digits in (3, 5) else pt
+            sl_dist = 30 * pip_size
+            tp_dist = 60 * pip_size
+
+        min_stop_dist = (si.trade_stops_level + 5) * pt
+        sl_dist = max(sl_dist, min_stop_dist)
+        tp_dist = max(tp_dist, min_stop_dist)
 
         if side == "BUY":
             price = ask
-            sl = bid - sl_points * pt
-            tp = ask + tp_points * pt
+            sl = bid - sl_dist
+            tp = ask + tp_dist
             ot = mt5.ORDER_TYPE_BUY
         else:
             price = bid
-            sl = ask + sl_points * pt
-            tp = bid - tp_points * pt
+            sl = ask + sl_dist
+            tp = bid - tp_dist
             ot = mt5.ORDER_TYPE_SELL
 
         return {
@@ -736,10 +835,65 @@ class ForexBot:
             "tp": round(tp, si.digits),
             "deviation": 10,
             "magic": Config.MAGIC_NUMBER,
-            "comment": "ForexBot_v1",
+            "comment": f"ATR:{round(atr,5)}",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
+
+    def _trailing_stop(self):
+        """Adjusts SL for profitable positions."""
+        if not Config.TRAILING_SL: return
+        
+        positions = mt5.positions_get(magic=Config.MAGIC_NUMBER)
+        if not positions: return
+
+        for p in positions:
+            sym = p.symbol
+            si = mt5.symbol_info(sym)
+            if not si: continue
+            
+            # Fetch latest ATR for dynamic trailing step
+            df = self._candles(sym, Config.TIMEFRAME, 20)
+            if df is None: continue
+            atr = self.ta.get_atr(df)
+            
+            trail_step = atr * 0.5 # Move SL every 0.5 ATR profit
+            bid, ask = self._price(sym)
+            
+            new_sl = 0.0
+            if p.type == mt5.POSITION_TYPE_BUY:
+                # If current price is far enough above SL
+                if bid - p.sl > atr * Config.ATR_SL_MULT:
+                    potential_sl = bid - (atr * Config.ATR_SL_MULT)
+                    if potential_sl > p.sl + trail_step:
+                        new_sl = potential_sl
+            elif p.type == mt5.POSITION_TYPE_SELL:
+                if p.sl - ask > atr * Config.ATR_SL_MULT:
+                    potential_sl = ask + (atr * Config.ATR_SL_MULT)
+                    if potential_sl < p.sl - trail_step:
+                        new_sl = potential_sl
+
+            if new_sl > 0:
+                request = {
+                    "action": mt5.TRADE_ACTION_SLTP,
+                    "symbol": sym,
+                    "position": p.ticket,
+                    "sl": round(new_sl, si.digits),
+                    "tp": p.tp,
+                    "magic": Config.MAGIC_NUMBER
+                }
+                res = mt5.order_send(request)
+                if res.retcode == mt5.TRADE_RETCODE_DONE:
+                    log.info("[%s] Trailing SL updated to %.5f", sym, new_sl)
+
+    def _log_trade(self, sym: str, side: str, conf: float, ta_sig: str, ml_sig: str, atr: float):
+        """Logs trade attempt details to CSV."""
+        with open(Config.LOG_FILE_TRADES, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                sym, side, round(conf, 2), ta_sig, ml_sig, round(atr, 6), ""
+            ])
 
     @staticmethod
     def _order_check_passed(retcode: int) -> bool:
@@ -750,8 +904,15 @@ class ForexBot:
         if not self._connect():
             return False
         try:
-            lot = self._lot(sym)
-            req = self._build_order_request(sym, side, lot)
+            df = self._candles(sym, Config.TIMEFRAME, 20)
+            atr = self.ta.get_atr(df) if df is not None else 0.0
+            
+            # Estimate SL points for lot calc
+            si = mt5.symbol_info(self._broker_symbol(sym))
+            sl_points = int((atr * Config.ATR_SL_MULT) / si.point) if atr > 0 else 300
+            
+            lot = self._lot(sym, sl_points)
+            req = self._build_order_request(sym, side, lot, atr)
             if req is None:
                 log.error("[%s] Could not build order request.", sym)
                 return False
@@ -765,8 +926,8 @@ class ForexBot:
         finally:
             mt5.shutdown()
 
-    def _order(self, sym: str, side: str, lot: float) -> bool:
-        req = self._build_order_request(sym, side, lot)
+    def _order(self, sym: str, side: str, lot: float, atr: float = 0.0) -> bool:
+        req = self._build_order_request(sym, side, lot, atr)
         if req is None:
             return False
 
@@ -925,6 +1086,9 @@ class ForexBot:
                 if not RiskManager.drawdown_ok(acc.equity, self.eq_start):
                     log.error("Bot stopping due to drawdown limit.")
                     break
+                
+                # Update Trailing SL for existing positions
+                self._trailing_stop()
 
                 # Process each symbol
                 for sym in Config.SYMBOLS:
@@ -935,10 +1099,13 @@ class ForexBot:
                             log.info("[%s] Position open — skipping.", sym)
                             continue
 
-                        sig, confidence = self._signal(sym)
+                        sig, confidence, ta_sig, ml_sig, atr = self._signal(sym)
                         if sig in ("BUY", "SELL"):
-                            lot = self._lot(sym, confidence)
-                            self._order(sym, sig, lot)
+                            si = mt5.symbol_info(self._broker_symbol(sym))
+                            sl_points = int((atr * Config.ATR_SL_MULT) / si.point) if atr > 0 else 300
+                            lot = self._lot(sym, sl_points, confidence)
+                            if self._order(sym, sig, lot, atr):
+                                self._log_trade(sym, sig, confidence, ta_sig, ml_sig, atr)
 
                     except Exception as e:
                         log.error("[%s] Error: %s", sym, e)
