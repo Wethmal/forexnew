@@ -75,7 +75,7 @@ class Config:
     SERVER   = os.getenv("MT5_SERVER",       "Exness-MT5Trial6")
 
     # ── Symbols to trade ──────────────────────────────────────
-    SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY"]
+    SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD"]
 
     # ── Timeframes ────────────────────────────────────────────
     TIMEFRAME       = mt5.TIMEFRAME_H1   # Primary entry timeframe (1-hour)
@@ -392,11 +392,16 @@ class CandlePredictor:
         return f
 
     def _labels(self, df: pd.DataFrame, threshold: float = None) -> pd.Series:
-        if threshold is None:
-            threshold = Config.LABEL_THRESHOLD
-        
         # Predict the return over the next 3 candles to smooth out noise
         fut = df["Close"].shift(-3) / df["Close"] - 1
+        
+        if threshold is None:
+            # Dynamic threshold based on ATR (adapts to Crypto vs Forex volatility)
+            h, l, c = df["High"], df["Low"], df["Close"]
+            tr = pd.concat([h-l, (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
+            atr_pct = tr.ewm(span=14, adjust=False).mean() / c
+            threshold = atr_pct * 0.5  # Must move at least half an ATR to be a valid BUY/SELL
+
         lab = pd.Series(1, index=df.index)  # 1 is HOLD
         lab[fut >  threshold] =  2          # 2 is BUY
         lab[fut < -threshold] =  0          # 0 is SELL
