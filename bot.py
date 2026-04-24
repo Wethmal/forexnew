@@ -33,7 +33,8 @@ from typing import Optional, Tuple, Dict, List
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier
+from xgboost import XGBClassifier
+from sklearn.utils.class_weight import compute_sample_weight
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
@@ -79,7 +80,7 @@ class Config:
     # ── Timeframes ────────────────────────────────────────────
     TIMEFRAME       = mt5.TIMEFRAME_H1   # Primary entry timeframe (1-hour)
     TREND_TIMEFRAME = mt5.TIMEFRAME_H4   # Secondary filter (default H4)
-    USE_TREND_FILTER = False             # Disabled by default per user request
+    USE_TREND_FILTER = True             # Enabled for safety
 
     # ── Risk Management ───────────────────────────────────────
     RISK_PCT           = 1.0    # % of balance per trade
@@ -88,8 +89,8 @@ class Config:
     MAX_DAILY_LOSS_PCT = 3.0    # daily loss cap (% of balance)
 
     # ── Trade Execution (Dynamic SL/TP) ───────────────────────
-    ATR_SL_MULT  = 1.5   # Stop Loss = 1.5 * ATR
-    ATR_TP_MULT  = 3.0   # Take Profit = 3.0 * ATR (2:1 Reward Ratio)
+    ATR_SL_MULT  = 2.0   # Stop Loss = 2.0 * ATR
+    ATR_TP_MULT  = 3.0   # Take Profit = 3.0 * ATR (better win rate)
     TRAILING_SL  = True  # Enable Trailing Stop Loss
     
     DEFAULT_LOT  = 0.01   # fallback lot size
@@ -98,7 +99,7 @@ class Config:
     # ── News Filter ───────────────────────────────────────────
     USE_NEWS_FILTER  = True
     NEWS_URL         = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-    NEWS_BUFFER_MINS = 30  # Stop trading 30m before/after high impact news
+    NEWS_BUFFER_MINS = 15  # Stop trading 30m before/after high impact news
 
     # ── ML Settings ───────────────────────────────────────────
     ML_LOOKBACK             = 20    # feature window (bars)
@@ -112,7 +113,7 @@ class Config:
     # ── Misc ──────────────────────────────────────────────────
     MAGIC_NUMBER  = 202401
     DATA_HISTORY  = 500   # candles fetched per scan
-    TRAIN_HISTORY = 1000  # candles used for initial ML training
+    TRAIN_HISTORY = 2000  # candles used for initial ML training (was 1000)
     MODEL_DIR     = "models"
 
     # ── Timeframe Mapping ─────────────────────────────────────
@@ -322,7 +323,7 @@ class CandlePredictor:
 
     def __init__(self, lookback: int = 20):
         self.lookback = lookback
-        self.models:  Dict[str, GradientBoostingClassifier] = {}
+        self.models:  Dict[str, XGBClassifier] = {}
         self.scalers: Dict[str, StandardScaler] = {}
         self.trained: Dict[str, bool] = {}
 
@@ -393,10 +394,12 @@ class CandlePredictor:
     def _labels(self, df: pd.DataFrame, threshold: float = None) -> pd.Series:
         if threshold is None:
             threshold = Config.LABEL_THRESHOLD
-        fut = df["Close"].shift(-1) / df["Close"] - 1
-        lab = pd.Series(0, index=df.index)
-        lab[fut >  threshold] =  1
-        lab[fut < -threshold] = -1
+        
+        # Predict the return over the next 3 candles to smooth out noise
+        fut = df["Close"].shift(-3) / df["Close"] - 1
+        lab = pd.Series(1, index=df.index)  # 1 is HOLD
+        lab[fut >  threshold] =  2          # 2 is BUY
+        lab[fut < -threshold] =  0          # 0 is SELL
         return lab
 
     # ── Training ──────────────────────────────────────────────
@@ -415,14 +418,22 @@ class CandlePredictor:
         scaler = StandardScaler()
         Xs = scaler.fit_transform(X)
 
+        # Validation split to log accuracy
         Xtr, Xvl, ytr, yvl = train_test_split(Xs, y, test_size=0.2, shuffle=False)
+        cw_val = compute_sample_weight(class_weight='balanced', y=ytr)
+        val_model = XGBClassifier(n_estimators=100, max_depth=6, learning_rate=0.05, objective='multi:softprob', random_state=42)
+        val_model.fit(Xtr, ytr, sample_weight=cw_val)
+        acc = accuracy_score(yvl, val_model.predict(Xvl))
 
-        model = GradientBoostingClassifier(
-            n_estimators=200, learning_rate=0.05,
-            max_depth=4, subsample=0.8, random_state=42
+        # Train final deployed model on ALL data (including newest)
+        model = XGBClassifier(
+            n_estimators=200, max_depth=6, learning_rate=0.05,
+            objective='multi:softprob', random_state=42
         )
-        model.fit(Xtr, ytr)
-        acc = accuracy_score(yvl, model.predict(Xvl))
+        # ONLINE LEARNING FEEDBACK: Add higher weight to recent data (rewards/penalties)
+        cw = compute_sample_weight(class_weight='balanced', y=y)
+        weights = cw * np.linspace(1.0, 5.0, len(y))
+        model.fit(Xs, y, sample_weight=weights)
         
         # Get TF string for filename
         R_MAP = {v: k for k, v in Config.TF_MAP.items()}
@@ -467,7 +478,7 @@ class CandlePredictor:
             prob = self.models[symbol].predict_proba(X)[0]
             cls  = self.models[symbol].classes_
             best = int(np.argmax(prob))
-            sig  = {-1: "SELL", 0: "HOLD", 1: "BUY"}.get(cls[best], "HOLD")
+            sig  = {0: "SELL", 1: "HOLD", 2: "BUY"}.get(cls[best], "HOLD")
             return sig, float(prob[best])
         except Exception as e:
             log.error("ML predict error: %s", e)
@@ -640,6 +651,7 @@ class ForexBot:
         self.news      = NewsFilter()
         self.running   = False
         self.eq_start  = 0.0
+        self.loop_count = 0  # For online learning feedback loop
         self.symbol_map: Dict[str, str] = {}
         
         # Initialize log file with header if not exists
@@ -715,7 +727,9 @@ class ForexBot:
             sig = ta_sig
         elif ml_con >= 0.80 and ml_sig != "HOLD":
             sig = ml_sig
-        elif ta_sig != "HOLD" and ml_con < 0.50:
+        elif ta_sig != "HOLD" and ml_sig == "HOLD":
+            # Allow TA signal to go through if ML is just predicting HOLD
+            # (ML only predicts the single next candle, which is often HOLD)
             sig = ta_sig
         else:
             sig = "HOLD"
@@ -767,15 +781,10 @@ class ForexBot:
         # Risk amount in account currency
         risk_amount = acc.balance * (Config.RISK_PCT / 100)
         
-        # Calculate lot size based on SL points and tick value
-        # Lot = Risk / (SL_Points * TickValue)
-        tick_val = si.trade_tick_value
-        if tick_val <= 0: return Config.DEFAULT_LOT
-        
-        # If SL is in points, we need to know how much 1 point is worth for 1 lot
-        # Risk = Lot * (SL_Points / TickSize) * TickValue
-        # Lot = Risk / ((SL_Points / TickSize) * TickValue)
-        lot = risk_amount / ((sl_points / si.trade_tick_size) * tick_val)
+        # Lot = Risk / ((SL_Points * (Point/TickSize)) * TickValue)
+        # si.point / si.trade_tick_size is usually 1.0 but handles non-standard brokers
+        points_per_tick = si.point / si.trade_tick_size
+        lot = risk_amount / (sl_points * points_per_tick * si.trade_tick_value)
 
         # Margin-aware clamp
         step = si.volume_step if si.volume_step and si.volume_step > 0 else 0.01
@@ -956,7 +965,8 @@ class ForexBot:
 
     def _has_position(self, sym: str) -> bool:
         broker_sym = self._broker_symbol(sym)
-        pos = mt5.positions_get(symbol=broker_sym)
+        # Only skip if the BOT itself has an open position for this symbol
+        pos = mt5.positions_get(symbol=broker_sym, magic=Config.MAGIC_NUMBER)
         return pos is not None and len(pos) > 0
 
     def backtest(self, history: int = 2500, test_ratio: float = 0.30) -> Dict[str, dict]:
@@ -1126,6 +1136,17 @@ class ForexBot:
                     time.sleep(5)
 
                 # log.info("— scan complete — sleeping %ds —", Config.LOOP_INTERVAL)
+                
+                # ONLINE LEARNING: Continuous Feedback Loop
+                self.loop_count += 1
+                if self.loop_count >= 240:  # Every ~4 hours
+                    log.info("Continuous Feedback Loop: Retraining models with latest data + penalties...")
+                    for sym in Config.SYMBOLS:
+                        df_retrain = self._candles(sym, Config.TIMEFRAME, Config.TRAIN_HISTORY)
+                        if df_retrain is not None and len(df_retrain) >= 100:
+                            self.ml.train(df_retrain, sym)
+                    self.loop_count = 0
+
                 time.sleep(Config.LOOP_INTERVAL)
 
         except KeyboardInterrupt:
