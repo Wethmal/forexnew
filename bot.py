@@ -844,47 +844,53 @@ class ForexBot:
         """Adjusts SL for profitable positions."""
         if not Config.TRAILING_SL: return
         
-        positions = mt5.positions_get(magic=Config.MAGIC_NUMBER)
-        if not positions: return
+        try:
+            positions = mt5.positions_get(magic=Config.MAGIC_NUMBER)
+            if not positions: return
 
-        for p in positions:
-            sym = p.symbol
-            si = mt5.symbol_info(sym)
-            if not si: continue
-            
-            # Fetch latest ATR for dynamic trailing step
-            df = self._candles(sym, Config.TIMEFRAME, 20)
-            if df is None: continue
-            atr = self.ta.get_atr(df)
-            
-            trail_step = atr * 0.5 # Move SL every 0.5 ATR profit
-            bid, ask = self._price(sym)
-            
-            new_sl = 0.0
-            if p.type == mt5.POSITION_TYPE_BUY:
-                # If current price is far enough above SL
-                if bid - p.sl > atr * Config.ATR_SL_MULT:
-                    potential_sl = bid - (atr * Config.ATR_SL_MULT)
-                    if potential_sl > p.sl + trail_step:
-                        new_sl = potential_sl
-            elif p.type == mt5.POSITION_TYPE_SELL:
-                if p.sl - ask > atr * Config.ATR_SL_MULT:
-                    potential_sl = ask + (atr * Config.ATR_SL_MULT)
-                    if potential_sl < p.sl - trail_step:
-                        new_sl = potential_sl
+            for p in positions:
+                try:
+                    sym = p.symbol
+                    si = mt5.symbol_info(sym)
+                    if not si: continue
+                    
+                    # Fetch latest ATR for dynamic trailing step
+                    df = self._candles(sym, Config.TIMEFRAME, 20)
+                    if df is None or len(df) < 14: continue
+                    atr = self.ta.get_atr(df)
+                    
+                    trail_step = atr * 0.5 # Move SL every 0.5 ATR profit
+                    bid, ask = self._price(sym)
+                    
+                    new_sl = 0.0
+                    if p.type == mt5.POSITION_TYPE_BUY:
+                        # If current price is far enough above SL
+                        if bid - p.sl > atr * Config.ATR_SL_MULT:
+                            potential_sl = bid - (atr * Config.ATR_SL_MULT)
+                            if potential_sl > p.sl + trail_step:
+                                new_sl = potential_sl
+                    elif p.type == mt5.POSITION_TYPE_SELL:
+                        if p.sl - ask > atr * Config.ATR_SL_MULT:
+                            potential_sl = ask + (atr * Config.ATR_SL_MULT)
+                            if potential_sl < p.sl - trail_step:
+                                new_sl = potential_sl
 
-            if new_sl > 0:
-                request = {
-                    "action": mt5.TRADE_ACTION_SLTP,
-                    "symbol": sym,
-                    "position": p.ticket,
-                    "sl": round(new_sl, si.digits),
-                    "tp": p.tp,
-                    "magic": Config.MAGIC_NUMBER
-                }
-                res = mt5.order_send(request)
-                if res.retcode == mt5.TRADE_RETCODE_DONE:
-                    log.info("[%s] Trailing SL updated to %.5f", sym, new_sl)
+                    if new_sl > 0:
+                        request = {
+                            "action": mt5.TRADE_ACTION_SLTP,
+                            "symbol": sym,
+                            "position": p.ticket,
+                            "sl": round(new_sl, si.digits),
+                            "tp": p.tp,
+                            "magic": Config.MAGIC_NUMBER
+                        }
+                        res = mt5.order_send(request)
+                        if res.retcode == mt5.TRADE_RETCODE_DONE:
+                            log.info("[%s] Trailing SL updated to %.5f", sym, new_sl)
+                except Exception as e:
+                    log.error("Error in trailing stop for %s: %s", p.symbol, e)
+        except Exception as e:
+            log.error("Critical error in trailing stop loop: %s", e)
 
     def _log_trade(self, sym: str, side: str, conf: float, ta_sig: str, ml_sig: str, atr: float):
         """Logs trade attempt details to CSV."""
@@ -1078,39 +1084,48 @@ class ForexBot:
         self.running = True
         try:
             while self.running:
-                acc = mt5.account_info()
-                if acc is None:
-                    log.error("Lost MT5 connection."); break
+                try:
+                    acc = mt5.account_info()
+                    if acc is None:
+                        log.error("Lost MT5 connection. Retrying in 10s...")
+                        time.sleep(10)
+                        if not self._connect(): continue
+                        acc = mt5.account_info()
 
-                # Drawdown guard
-                if not RiskManager.drawdown_ok(acc.equity, self.eq_start):
-                    log.error("Bot stopping due to drawdown limit.")
-                    break
-                
-                # Update Trailing SL for existing positions
-                self._trailing_stop()
+                    # Drawdown guard
+                    if not RiskManager.drawdown_ok(acc.equity, self.eq_start):
+                        log.error("Bot stopping due to drawdown limit.")
+                        self.running = False
+                        break
+                    
+                    # Update Trailing SL for existing positions
+                    self._trailing_stop()
 
-                # Process each symbol
-                for sym in Config.SYMBOLS:
-                    try:
-                        if not self.risk.can_trade(acc.balance):
-                            break
-                        if self._has_position(sym):
-                            log.info("[%s] Position open — skipping.", sym)
-                            continue
+                    # Process each symbol
+                    for sym in Config.SYMBOLS:
+                        try:
+                            if not self.risk.can_trade(acc.balance):
+                                break
+                            if self._has_position(sym):
+                                # log.info("[%s] Position open — skipping.", sym)
+                                continue
 
-                        sig, confidence, ta_sig, ml_sig, atr = self._signal(sym)
-                        if sig in ("BUY", "SELL"):
-                            si = mt5.symbol_info(self._broker_symbol(sym))
-                            sl_points = int((atr * Config.ATR_SL_MULT) / si.point) if atr > 0 else 300
-                            lot = self._lot(sym, sl_points, confidence)
-                            if self._order(sym, sig, lot, atr):
-                                self._log_trade(sym, sig, confidence, ta_sig, ml_sig, atr)
+                            sig, confidence, ta_sig, ml_sig, atr = self._signal(sym)
+                            if sig in ("BUY", "SELL"):
+                                si = mt5.symbol_info(self._broker_symbol(sym))
+                                sl_points = int((atr * Config.ATR_SL_MULT) / si.point) if atr > 0 else 300
+                                lot = self._lot(sym, sl_points, confidence)
+                                if self._order(sym, sig, lot, atr):
+                                    self._log_trade(sym, sig, confidence, ta_sig, ml_sig, atr)
 
-                    except Exception as e:
-                        log.error("[%s] Error: %s", sym, e)
+                        except Exception as e:
+                            log.error("[%s] Error in symbol loop: %s", sym, e)
 
-                log.info("— scan complete — sleeping %ds —", Config.LOOP_INTERVAL)
+                except Exception as e:
+                    log.error("Main loop error: %s. Continuing...", e)
+                    time.sleep(5)
+
+                # log.info("— scan complete — sleeping %ds —", Config.LOOP_INTERVAL)
                 time.sleep(Config.LOOP_INTERVAL)
 
         except KeyboardInterrupt:

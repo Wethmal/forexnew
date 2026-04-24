@@ -4888,3 +4888,81 @@
 2026-04-23 15:45:46,756 | INFO     | MT5 disconnected. Goodbye.
 2026-04-23 15:46:06,363 | ERROR    | Lost MT5 connection.
 2026-04-23 15:46:06,363 | INFO     | MT5 disconnected. Goodbye.
+2026-04-23 15:58:15,942 | INFO     | ============================================================
+2026-04-23 15:58:15,943 | INFO     |   FOREX BOT STARTING
+2026-04-23 15:58:15,943 | INFO     |   Symbols      : ['EURUSD', 'GBPUSD', 'USDJPY']
+2026-04-23 15:58:15,943 | INFO     |   Entry TF     : H1
+2026-04-23 15:58:15,944 | INFO     |   Trend Filter : DISABLED
+2026-04-23 15:58:15,944 | INFO     |   Risk/trade   : 1.0%  |  Max DD: 10.0%
+2026-04-23 15:58:15,944 | INFO     | ============================================================
+2026-04-23 15:58:19,924 | INFO     | Mapped symbol EURUSD -> EURUSDm
+2026-04-23 15:58:19,925 | INFO     | Mapped symbol GBPUSD -> GBPUSDm
+2026-04-23 15:58:19,925 | INFO     | Mapped symbol USDJPY -> USDJPYm
+2026-04-23 15:58:19,925 | INFO     | Connected | Account #413646889 | Balance: 96.90 | Equity: 99.46
+2026-04-23 15:58:19,926 | INFO     | Training ML models (this may take a moment)...
+2026-04-23 15:58:23,267 | INFO     | [EURUSD] ML trained (H1) | val accuracy: 87.8%
+2026-04-23 15:58:25,444 | INFO     | [GBPUSD] ML trained (H1) | val accuracy: 81.1%
+2026-04-23 15:58:27,592 | INFO     | [USDJPY] ML trained (H1) | val accuracy: 88.8%
+2026-04-23 15:58:27,602 | INFO     | ML models ready.
+2026-04-23 15:58:27,748 | INFO     | [USDJPYm] Trailing SL updated to 159.60219
+2026-04-23 15:58:27,825 | INFO     | [EURUSDm] Trailing SL updated to 1.17000
+2026-04-23 15:58:27,826 | INFO     | [EURUSD] Position open — skipping.
+2026-04-23 15:58:27,826 | INFO     | [GBPUSD] Position open — skipping.
+2026-04-23 15:58:27,826 | INFO     | [USDJPY] Position open — skipping.
+2026-04-23 15:58:27,827 | INFO     | — scan complete — sleeping 60s —
+2026-04-23 15:59:27,833 | INFO     | [EURUSD] Position open — skipping.
+2026-04-23 15:59:27,833 | INFO     | [GBPUSD] Position open — skipping.
+2026-04-23 15:59:27,834 | INFO     | [USDJPY] Position open — skipping.
+2026-04-23 15:59:27,834 | INFO     | — scan complete — sleeping 60s —
+2026-04-23 16:00:27,841 | INFO     | [EURUSD] Position open — skipping.
+2026-04-23 16:00:27,841 | INFO     | [GBPUSD] Position open — skipping.
+2026-04-23 16:00:27,841 | INFO     | [USDJPY] Position open — skipping.
+2026-04-23 16:00:27,841 | INFO     | — scan complete — sleeping 60s —
+2026-04-23 16:01:27,848 | INFO     | [EURUSD] Position open — skipping.
+2026-04-23 16:01:27,849 | INFO     | [GBPUSD] Position open — skipping.
+2026-04-23 16:01:27,849 | INFO     | [USDJPY] Position open — skipping.
+2026-04-23 16:01:27,849 | INFO     | — scan complete — sleeping 60s —
+2026-04-23 16:02:27,856 | INFO     | [EURUSD] Position open — skipping.
+2026-04-23 16:02:27,856 | INFO     | [GBPUSD] Position open — skipping.
+2026-04-23 16:02:27,856 | INFO     | [USDJPY] Position open — skipping.
+2026-04-23 16:02:27,856 | INFO     | — scan complete — sleeping 60s —
+2026-04-23 16:03:27,867 | INFO     | [EURUSD] Position open — skipping.
+2026-04-23 16:03:27,868 | INFO     | [GBPUSD] Position open — skipping.
+2026-04-23 16:03:27,868 | INFO     | [USDJPY] Position open — skipping.
+2026-04-23 16:03:27,868 | INFO     | — scan complete — sleeping 60s —
+2026-04-23 16:04:27,888 | INFO     | [EURUSD] Position open — skipping.
+2026-04-23 16:04:27,889 | INFO     | [GBPUSD] Position open — skipping.
+2026-04-23 16:04:27,893 | INFO     | [USDJPY] Position open — skipping.
+2026-04-23 16:04:27,894 | INFO     | — scan complete — sleeping 60s —
+2026-04-23 16:05:12,263 | INFO     | ============================================================
+2026-04-23 16:05:12,266 | INFO     |   FOREX BOT STARTING
+2026-04-23 16:05:12,267 | INFO     |   Symbols      : ['EURUSD', 'GBPUSD', 'USDJPY']
+2026-04-23 16:05:12,269 | INFO     |   Entry TF     : H1
+2026-04-23 16:05:12,270 | INFO     |   Trend Filter : DISABLED
+2026-04-23 16:05:12,274 | INFO     |   Risk/trade   : 1.0%  |  Max DD: 10.0%
+2026-04-23 16:05:12,278 | INFO     | ============================================================
+2026-04-23 16:05:12,295 | INFO     | Mapped symbol EURUSD -> EURUSDm
+2026-04-23 16:05:12,295 | INFO     | Mapped symbol GBPUSD -> GBPUSDm
+2026-04-23 16:05:12,295 | INFO     | Mapped symbol USDJPY -> USDJPYm
+2026-04-23 16:05:12,295 | INFO     | Connected | Account #413646889 | Balance: 96.90 | Equity: 98.99
+2026-04-23 16:05:12,296 | INFO     | Training ML models (this may take a moment)...
+2026-04-23 16:05:14,402 | INFO     | [EURUSD] ML trained (H1) | val accuracy: 87.8%
+2026-04-23 16:05:16,538 | INFO     | [GBPUSD] ML trained (H1) | val accuracy: 81.1%
+2026-04-23 16:05:18,714 | INFO     | [USDJPY] ML trained (H1) | val accuracy: 88.8%
+2026-04-23 16:05:18,723 | INFO     | ML models ready.
+2026-04-23 16:05:18,731 | INFO     | [EURUSD] Position open — skipping.
+2026-04-23 16:05:18,732 | INFO     | [GBPUSD] Position open — skipping.
+2026-04-23 16:05:18,732 | INFO     | [USDJPY] Position open — skipping.
+2026-04-23 16:05:18,732 | INFO     | — scan complete — sleeping 60s —
+2026-04-23 16:05:27,902 | INFO     | [EURUSD] Position open — skipping.
+2026-04-23 16:05:27,902 | INFO     | [GBPUSD] Position open — skipping.
+2026-04-23 16:05:27,902 | INFO     | [USDJPY] Position open — skipping.
+2026-04-23 16:05:27,902 | INFO     | — scan complete — sleeping 60s —
+2026-04-23 16:06:18,747 | INFO     | [EURUSD] Position open — skipping.
+2026-04-23 16:06:18,747 | INFO     | [GBPUSD] Position open — skipping.
+2026-04-23 16:06:18,748 | INFO     | [USDJPY] Position open — skipping.
+2026-04-23 16:06:18,748 | INFO     | — scan complete — sleeping 60s —
+2026-04-23 16:06:27,910 | INFO     | [EURUSD] Position open — skipping.
+2026-04-23 16:06:27,910 | INFO     | [GBPUSD] Position open — skipping.
+2026-04-23 16:06:27,910 | INFO     | [USDJPY] Position open — skipping.
+2026-04-23 16:06:27,910 | INFO     | — scan complete — sleeping 60s —
