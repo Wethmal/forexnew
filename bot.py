@@ -75,10 +75,10 @@ class Config:
     SERVER   = os.getenv("MT5_SERVER",       "Exness-MT5Trial6")
 
     # ── Symbols to trade ──────────────────────────────────────
-    SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD"]
+    SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD"]
 
     # ── Timeframes ────────────────────────────────────────────
-    TIMEFRAME       = mt5.TIMEFRAME_H1   # Primary entry timeframe (1-hour)
+    TIMEFRAMES      = [mt5.TIMEFRAME_M15, mt5.TIMEFRAME_M30, mt5.TIMEFRAME_H1]
     TREND_TIMEFRAME = mt5.TIMEFRAME_H4   # Secondary filter (default H4)
     USE_TREND_FILTER = True             # Enabled for safety
 
@@ -91,6 +91,7 @@ class Config:
     # ── Trade Execution (Dynamic SL/TP) ───────────────────────
     ATR_SL_MULT  = 2.0   # Stop Loss = 2.0 * ATR
     ATR_TP_MULT  = 3.0   # Take Profit = 3.0 * ATR (better win rate)
+    BREAK_EVEN_ATR_MULT = 1.2 # Move to break-even after 1.2 ATR profit
     TRAILING_SL  = True  # Enable Trailing Stop Loss
     
     DEFAULT_LOT  = 0.01   # fallback lot size
@@ -106,6 +107,10 @@ class Config:
     ML_CONFIDENCE_THRESHOLD = 0.60  # min confidence to act on ML signal
     ML_RETRAIN_CANDLES      = 1000  # retrain when this many new candles seen
     LOG_FILE_TRADES         = "trade_logs.csv"
+    
+    # ── Anti-Noise Filter ─────────────────────────────────────
+    MIN_ADX                 = 22    # Only trade if trend strength is > 22
+    EMA_SQUEEZE_THRESHOLD   = 0.0010 # 10 pips max gap between EMAs (avoid sideways)
 
     # ── Bot Loop ──────────────────────────────────────────────
     LOOP_INTERVAL = 60    # seconds between each market scan
@@ -210,6 +215,40 @@ class TechnicalAnalysis:
         sb  = ((h.rolling(52).max() + l.rolling(52).min()) / 2).shift(26)
         return {"tenkan": ten, "kijun": kij, "senkou_a": sa, "senkou_b": sb}
 
+    def _get_candle_patterns(self, df: pd.DataFrame) -> dict:
+        """Identifies key price action patterns from the last 2 candles."""
+        c1, c2 = df.iloc[-2], df.iloc[-1] # c1 = previous, c2 = current
+        
+        o1, h1, l1, cl1 = c1["Open"], c1["High"], c1["Low"], c1["Close"]
+        o2, h2, l2, cl2 = c2["Open"], c2["High"], c2["Low"], c2["Close"]
+        
+        body1 = abs(cl1 - o1)
+        body2 = abs(cl2 - o2)
+        range1 = h1 - l1
+        range2 = h2 - l2
+        
+        res = {"bull": [], "bear": []}
+        
+        # 1. Engulfing
+        if cl2 > o2 and cl1 < o1 and o2 < cl1 and cl2 > o1:
+            res["bull"].append("ENGULFING")
+        elif cl2 < o2 and cl1 > o1 and o2 > cl1 and cl2 < o1:
+            res["bear"].append("ENGULFING")
+            
+        # 2. Pin Bar / Hammer
+        lower_wick2 = min(o2, cl2) - l2
+        upper_wick2 = h2 - max(o2, cl2)
+        if lower_wick2 > (body2 * 2) and upper_wick2 < (body2 * 0.5):
+            res["bull"].append("HAMMER")
+        elif upper_wick2 > (body2 * 2) and lower_wick2 < (body2 * 0.5):
+            res["bear"].append("SHOOTING_STAR")
+            
+        # 3. Doji (Indecision)
+        if body2 < (range2 * 0.1):
+            res["neutral"] = "DOJI"
+            
+        return res
+
     def get_signal(self, df: pd.DataFrame) -> Tuple[str, dict]:
         """Return (signal, details_dict). signal ∈ {'BUY','SELL','HOLD'}"""
         close = df["Close"]
@@ -259,25 +298,48 @@ class TechnicalAnalysis:
         elif kv < dv:              sell += 1; d["stoch"] = "BEAR_X"
         else:                                 d["stoch"] = "NEUTRAL"
 
-        # 6. ADX — reduces votes if trend is weak
-        adx = self._adx(df).iloc[-1]
+        # 6. ADX — trend strength (HARD FILTER for noise)
+        adx_series = self._adx(df)
+        adx = adx_series.iloc[-1]
+        adx_slope = adx - adx_series.iloc[-3]
         d["adx"] = round(adx, 2)
-        if adx < 20:
-            buy  = max(0, buy  - 2)
-            sell = max(0, sell - 2)
-            d["adx_sig"] = "WEAK"
-        else:
-            d["adx_sig"] = "STRONG"
+        
+        is_noisy = False
+        if adx < Config.MIN_ADX:
+            is_noisy = True
+            d["noise_reason"] = "LOW_ADX"
+        elif adx_slope < -2: # ADX falling sharply
+            is_noisy = True
+            d["noise_reason"] = "FALLING_TREND"
 
-        # 7. Ichimoku
+        # 7. EMA Squeeze Detection (Sideways Noise)
+        ema_gap = abs(e20 - e50) / price
+        if ema_gap < Config.EMA_SQUEEZE_THRESHOLD:
+            is_noisy = True
+            d["noise_reason"] = "EMA_SQUEEZE"
+
+        # 8. Ichimoku
         ichi = self._ichimoku(df)
         cloud_top = max(ichi["senkou_a"].iloc[-1], ichi["senkou_b"].iloc[-1])
         cloud_bot = min(ichi["senkou_a"].iloc[-1], ichi["senkou_b"].iloc[-1])
         if price > cloud_top:   buy  += 1; d["ichi"] = "ABOVE"
         elif price < cloud_bot: sell += 1; d["ichi"] = "BELOW"
-        else:                              d["ichi"] = "IN_CLOUD"
+        else:                              
+            is_noisy = True; d["ichi"] = "IN_CLOUD"
+            d["noise_reason"] = "IN_CLOUD"
 
-        d.update(buy_votes=buy, sell_votes=sell)
+        # 9. Candlestick Patterns
+        patterns = self._get_candle_patterns(df)
+        d["patterns"] = patterns
+        if patterns["bull"]:
+            buy += 2 * len(patterns["bull"])
+        if patterns["bear"]:
+            sell += 2 * len(patterns["bear"])
+
+        d.update(buy_votes=buy, sell_votes=sell, is_noisy=is_noisy)
+
+        if is_noisy:
+            return "HOLD", d
 
         MIN_VOTES = 5
         if buy >= MIN_VOTES and buy > sell * 1.3:   return "BUY",  d
@@ -298,6 +360,12 @@ class TechnicalAnalysis:
         elif e50 < e200:
             return "BEAR"
         return "NEUTRAL"
+
+    def get_swing_levels(self, df: pd.DataFrame, n=20) -> Tuple[float, float]:
+        """Finds recent swing high and low for SL placement."""
+        low = df["Low"].iloc[-n:].min()
+        high = df["High"].iloc[-n:].max()
+        return low, high
 
 
 # ══════════════════════════════════════════════════════════════
@@ -323,9 +391,9 @@ class CandlePredictor:
 
     def __init__(self, lookback: int = 20):
         self.lookback = lookback
-        self.models:  Dict[str, XGBClassifier] = {}
-        self.scalers: Dict[str, StandardScaler] = {}
-        self.trained: Dict[str, bool] = {}
+        self.models:  Dict[Tuple[str, int], XGBClassifier] = {}
+        self.scalers: Dict[Tuple[str, int], StandardScaler] = {}
+        self.trained: Dict[Tuple[str, int], bool] = {}
 
     # ── Feature Engineering ───────────────────────────────────
     def _features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -408,13 +476,13 @@ class CandlePredictor:
         return lab
 
     # ── Training ──────────────────────────────────────────────
-    def train(self, df: pd.DataFrame, symbol: str = "default") -> float:
+    def train(self, df: pd.DataFrame, symbol: str = "default", tf: int = 16385) -> float:
         feat   = self._features(df)
         labels = self._labels(df)
 
         data = pd.concat([feat, labels.rename("y")], axis=1).dropna().iloc[:-1]
         if len(data) < 100:
-            log.warning("[%s] Not enough rows for ML training.", symbol)
+            log.warning("[%s|%d] Not enough rows for ML training.", symbol, tf)
             return 0.0
 
         X = data.drop("y", axis=1).values
@@ -435,42 +503,39 @@ class CandlePredictor:
             n_estimators=200, max_depth=6, learning_rate=0.05,
             objective='multi:softprob', random_state=42
         )
-        # ONLINE LEARNING FEEDBACK: Add higher weight to recent data (rewards/penalties)
         cw = compute_sample_weight(class_weight='balanced', y=y)
         weights = cw * np.linspace(1.0, 5.0, len(y))
         model.fit(Xs, y, sample_weight=weights)
         
-        # Get TF string for filename
-        R_MAP = {v: k for k, v in Config.TF_MAP.items()}
-        tf_str = R_MAP.get(Config.TIMEFRAME, "UNK")
+        self.models[(symbol, tf)] = model
+        self.scalers[(symbol, tf)] = scaler
+        self.trained[(symbol, tf)] = True
         
-        log.info("[%s] ML trained (%s) | val accuracy: %.1f%%", symbol, tf_str, acc * 100)
-
-        self.models[symbol]  = model
-        self.scalers[symbol] = scaler
-        self.trained[symbol] = True
-
+        # Save model
         os.makedirs(Config.MODEL_DIR, exist_ok=True)
-        joblib.dump(model,  f"{Config.MODEL_DIR}/{symbol}_{tf_str}_model.pkl")
-        joblib.dump(scaler, f"{Config.MODEL_DIR}/{symbol}_{tf_str}_scaler.pkl")
+        joblib.dump(model,  f"{Config.MODEL_DIR}/{symbol}_{tf}_model.pkl")
+        joblib.dump(scaler, f"{Config.MODEL_DIR}/{symbol}_{tf}_scaler.pkl")
+        
+        R_MAP = {v: k for k, v in Config.TF_MAP.items()}
+        tf_str = R_MAP.get(tf, str(tf))
+        log.info("[%s] ML trained (%s) | val accuracy: %.1f%%", symbol, tf_str, acc * 100)
         return acc
 
-    def load(self, symbol: str) -> bool:
+    def load(self, symbol: str, tf: int) -> bool:
         try:
-            R_MAP = {v: k for k, v in Config.TF_MAP.items()}
-            tf_str = R_MAP.get(Config.TIMEFRAME, "UNK")
-            self.models[symbol]  = joblib.load(f"{Config.MODEL_DIR}/{symbol}_{tf_str}_model.pkl")
-            self.scalers[symbol] = joblib.load(f"{Config.MODEL_DIR}/{symbol}_{tf_str}_scaler.pkl")
-            self.trained[symbol] = True
-            log.info("[%s] Loaded saved ML model (%s).", symbol, tf_str)
-            return True
-        except FileNotFoundError:
+            m_path = f"{Config.MODEL_DIR}/{symbol}_{tf}_model.pkl"
+            s_path = f"{Config.MODEL_DIR}/{symbol}_{tf}_scaler.pkl"
+            if os.path.exists(m_path):
+                self.models[(symbol, tf)]  = joblib.load(m_path)
+                self.scalers[(symbol, tf)] = joblib.load(s_path)
+                self.trained[(symbol, tf)] = True
+                return True
             return False
+        except: return False
 
-    # ── Prediction ────────────────────────────────────────────
-    def predict(self, df: pd.DataFrame, symbol: str = "default") -> Tuple[str, float]:
-        if not self.trained.get(symbol):
-            if not self.load(symbol):
+    def predict(self, df: pd.DataFrame, symbol: str, tf: int) -> Tuple[str, float]:
+        if (symbol, tf) not in self.trained:
+            if not self.load(symbol, tf):
                 return "HOLD", 0.0
 
         feat   = self._features(df)
@@ -479,14 +544,14 @@ class CandlePredictor:
             return "HOLD", 0.0
 
         try:
-            X    = self.scalers[symbol].transform(latest.values)
-            prob = self.models[symbol].predict_proba(X)[0]
-            cls  = self.models[symbol].classes_
+            X    = self.scalers[(symbol, tf)].transform(latest.values)
+            prob = self.models[(symbol, tf)].predict_proba(X)[0]
+            cls  = self.models[(symbol, tf)].classes_
             best = int(np.argmax(prob))
             sig  = {0: "SELL", 1: "HOLD", 2: "BUY"}.get(cls[best], "HOLD")
             return sig, float(prob[best])
         except Exception as e:
-            log.error("ML predict error: %s", e)
+            log.error("ML predict error [%s|%d]: %s", symbol, tf, e)
             return "HOLD", 0.0
 
 
@@ -723,9 +788,9 @@ class ForexBot:
             raise RuntimeError(f"No tick data for {sym}")
         return t.bid, t.ask
 
-    def _combine_signal_from_df(self, df: pd.DataFrame, sym: str, trend: str = "NEUTRAL") -> Tuple[str, str, str, float, dict]:
+    def _combine_signal_from_df(self, df: pd.DataFrame, sym: str, tf: int, trend: str = "NEUTRAL") -> Tuple[str, str, str, float, dict]:
         ta_sig, ta_det = self.ta.get_signal(df)
-        ml_sig, ml_con = self.ml.predict(df, sym)
+        ml_sig, ml_con = self.ml.predict(df, sym, tf)
 
         # Both agree + ML confident -> strong signal
         if ta_sig == ml_sig and ml_con >= Config.ML_CONFIDENCE_THRESHOLD:
@@ -739,24 +804,29 @@ class ForexBot:
         else:
             sig = "HOLD"
 
+        # Apply noise filter from TA
+        if ta_det.get("is_noisy", False):
+            # log.info("[%s] Signal blocked by Market Noise filter (%s).", sym, ta_det.get("noise_reason"))
+            sig = "HOLD"
+
         # Apply trend filter
         if Config.USE_TREND_FILTER and trend != "NEUTRAL":
             if sig == "BUY" and trend != "BULL":
-                log.info("[%s] BUY signal blocked by %s trend filter.", sym, trend)
+                log.info("[%s|%d] BUY signal blocked by %s trend filter.", sym, tf, trend)
                 sig = "HOLD"
             elif sig == "SELL" and trend != "BEAR":
-                log.info("[%s] SELL signal blocked by %s trend filter.", sym, trend)
+                log.info("[%s|%d] SELL signal blocked by %s trend filter.", sym, tf, trend)
                 sig = "HOLD"
 
         return sig, ta_sig, ml_sig, ml_con, ta_det
 
-    def _signal(self, sym: str) -> Tuple[str, float, str, str, float]:
+    def _signal(self, sym: str, tf: int) -> Tuple[str, float, str, str, float]:
         # News Filter Check
         if self.news.is_news_time(sym):
             return "HOLD", 0.0, "HOLD", "HOLD", 0.0
 
         # Entry timeframe data
-        df = self._candles(sym, Config.TIMEFRAME, Config.DATA_HISTORY)
+        df = self._candles(sym, tf, Config.DATA_HISTORY)
         if df is None or len(df) < 100:
             return "HOLD", 0.0, "HOLD", "HOLD", 0.0
 
@@ -766,12 +836,12 @@ class ForexBot:
             df_trend = self._candles(sym, Config.TREND_TIMEFRAME, Config.DATA_HISTORY)
             trend = self.ta.get_trend_direction(df_trend)
 
-        sig, ta_sig, ml_sig, ml_con, ta_det = self._combine_signal_from_df(df, sym, trend)
+        sig, ta_sig, ml_sig, ml_con, ta_det = self._combine_signal_from_df(df, sym, tf, trend)
         atr = self.ta.get_atr(df)
 
-        log.info("[%s] Trend=%s | TA=%s(B:%d/S:%d) | ML=%s(%.0f%%) | ATR=%.5f | FINAL=%s",
-                 sym, trend, ta_sig, ta_det.get("buy_votes", 0),
-                 ta_det.get("sell_votes", 0), ml_sig, ml_con * 100, atr, sig)
+        if sig != "HOLD":
+            log.info("[%s|%d] Trend=%s | TA=%s | ML=%s(%.0f%%) | ATR=%.5f | FINAL=%s",
+                    sym, tf, trend, ta_sig, ml_sig, ml_con * 100, atr, sig)
 
         return sig, ml_con, ta_sig, ml_sig, atr
 
@@ -807,37 +877,45 @@ class ForexBot:
 
         return si.volume_min
 
-    def _build_order_request(self, sym: str, side: str, lot: float, atr: float = 0.0) -> Optional[dict]:
+    def _build_order_request(self, sym: str, tf: int, side: str, lot: float, atr: float = 0.0) -> Optional[dict]:
         broker_sym = self._broker_symbol(sym)
         si = mt5.symbol_info(broker_sym)
         if si is None: return None
         bid, ask = self._price(sym)
         pt = si.point
 
-        # Dynamic SL/TP based on ATR
-        if atr > 0:
-            sl_dist = atr * Config.ATR_SL_MULT
-            tp_dist = atr * Config.ATR_TP_MULT
-        else:
-            # Fallback to points if ATR is missing (e.g. 30 pips)
-            pip_size = 10 * pt if si.digits in (3, 5) else pt
-            sl_dist = 30 * pip_size
-            tp_dist = 60 * pip_size
-
-        min_stop_dist = (si.trade_stops_level + 5) * pt
-        sl_dist = max(sl_dist, min_stop_dist)
-        tp_dist = max(tp_dist, min_stop_dist)
+        # Expert Logic: Structure-based SL + ATR-based TP
+        df = self._candles(sym, tf, 30)
+        swing_low, swing_high = self.ta.get_swing_levels(df) if df is not None else (0, 0)
 
         if side == "BUY":
             price = ask
-            sl = bid - sl_dist
-            tp = ask + tp_dist
+            # SL is the lower of (ATR-based SL) or (Swing Low - 5 pips)
+            atr_sl = bid - (atr * Config.ATR_SL_MULT)
+            struct_sl = swing_low - (5 * pt)
+            sl = max(atr_sl, struct_sl) if swing_low > 0 else atr_sl
+            
+            tp = ask + (atr * Config.ATR_TP_MULT)
             ot = mt5.ORDER_TYPE_BUY
         else:
             price = bid
-            sl = ask + sl_dist
-            tp = bid - tp_dist
+            # SL is the higher of (ATR-based SL) or (Swing High + 5 pips)
+            atr_sl = ask + (atr * Config.ATR_SL_MULT)
+            struct_sl = swing_high + (5 * pt)
+            sl = min(atr_sl, struct_sl) if swing_high > 0 else atr_sl
+            
+            tp = bid - (atr * Config.ATR_TP_MULT)
             ot = mt5.ORDER_TYPE_SELL
+
+        # Ensure SL/TP are not too close (broker limits)
+        min_stop_dist = (si.trade_stops_level + 5) * pt
+        if abs(price - sl) < min_stop_dist:
+            sl = price - min_stop_dist if side == "BUY" else price + min_stop_dist
+        if abs(price - tp) < min_stop_dist:
+            tp = price + min_stop_dist if side == "BUY" else price - min_stop_dist
+
+        # TF-based Magic Number
+        magic = Config.MAGIC_NUMBER + (tf % 100)
 
         return {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -848,63 +926,81 @@ class ForexBot:
             "sl": round(sl, si.digits),
             "tp": round(tp, si.digits),
             "deviation": 10,
-            "magic": Config.MAGIC_NUMBER,
-            "comment": f"ATR:{round(atr,5)}",
+            "magic": magic,
+            "comment": f"ExpertV1_{tf}",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
 
     def _trailing_stop(self):
-        """Adjusts SL for profitable positions."""
+        """Expert-level Trailing Stop: Combines Break-even, ATR, and Market Structure."""
         if not Config.TRAILING_SL: return
         
         try:
-            positions = mt5.positions_get(magic=Config.MAGIC_NUMBER)
+            positions = mt5.positions_get()
             if not positions: return
 
             for p in positions:
+                # Filter by our magic number base range
+                if not (Config.MAGIC_NUMBER <= p.magic <= Config.MAGIC_NUMBER + 100):
+                    continue
+                    
                 try:
                     sym = p.symbol
+                    # Decode TF from magic
+                    tf_offset = p.magic - Config.MAGIC_NUMBER
+                    tf = 16385 # fallback
+                    for k, v in Config.TF_MAP.items():
+                        if v % 100 == tf_offset:
+                            tf = v; break
+
                     si = mt5.symbol_info(sym)
                     if not si: continue
                     
-                    # Fetch latest ATR for dynamic trailing step
-                    df = self._candles(sym, Config.TIMEFRAME, 20)
+                    df = self._candles(sym, tf, 30)
                     if df is None or len(df) < 14: continue
                     atr = self.ta.get_atr(df)
+                    swing_low, swing_high = self.ta.get_swing_levels(df)
                     
-                    trail_step = atr * 0.5 # Move SL every 0.5 ATR profit
                     bid, ask = self._price(sym)
-                    
                     new_sl = 0.0
+
                     if p.type == mt5.POSITION_TYPE_BUY:
-                        # If current price is far enough above SL
-                        if bid - p.sl > atr * Config.ATR_SL_MULT:
-                            potential_sl = bid - (atr * Config.ATR_SL_MULT)
-                            if potential_sl > p.sl + trail_step:
-                                new_sl = potential_sl
+                        # 1. Break-Even
+                        if p.sl < p.price_open and bid - p.price_open > atr * Config.BREAK_EVEN_ATR_MULT:
+                            new_sl = p.price_open + (2 * si.point)
+                        
+                        # 2. Structure-based Trailing (Pro)
+                        elif swing_low > p.sl + (5 * si.point) and bid > swing_low + atr:
+                            new_sl = swing_low - (2 * si.point)
+                            
                     elif p.type == mt5.POSITION_TYPE_SELL:
-                        if p.sl - ask > atr * Config.ATR_SL_MULT:
-                            potential_sl = ask + (atr * Config.ATR_SL_MULT)
-                            if potential_sl < p.sl - trail_step:
-                                new_sl = potential_sl
+                        # 1. Break-Even
+                        if p.sl > p.price_open and p.price_open - ask > atr * Config.BREAK_EVEN_ATR_MULT:
+                            new_sl = p.price_open - (2 * si.point)
+                        
+                        # 2. Structure-based Trailing (Pro)
+                        elif swing_high < p.sl - (5 * si.point) and ask < swing_high - atr:
+                            new_sl = swing_high + (2 * si.point)
 
                     if new_sl > 0:
-                        request = {
-                            "action": mt5.TRADE_ACTION_SLTP,
-                            "symbol": sym,
-                            "position": p.ticket,
-                            "sl": round(new_sl, si.digits),
-                            "tp": p.tp,
-                            "magic": Config.MAGIC_NUMBER
-                        }
-                        res = mt5.order_send(request)
-                        if res.retcode == mt5.TRADE_RETCODE_DONE:
-                            log.info("[%s] Trailing SL updated to %.5f", sym, new_sl)
+                        # Only update if it actually improves protection
+                        is_better = (p.type == mt5.POSITION_TYPE_BUY and new_sl > p.sl) or \
+                                    (p.type == mt5.POSITION_TYPE_SELL and new_sl < p.sl)
+                        if is_better:
+                            request = {
+                                "action": mt5.TRADE_ACTION_SLTP,
+                                "symbol": sym,
+                                "position": p.ticket,
+                                "sl": round(new_sl, si.digits),
+                                "tp": p.tp,
+                                "magic": p.magic
+                            }
+                            mt5.order_send(request)
                 except Exception as e:
-                    log.error("Error in trailing stop for %s: %s", p.symbol, e)
+                    log.error("Expert trailing error [%s]: %s", p.symbol, e)
         except Exception as e:
-            log.error("Critical error in trailing stop loop: %s", e)
+            log.error("Critical error in expert trailing loop: %s", e)
 
     def _log_trade(self, sym: str, side: str, conf: float, ta_sig: str, ml_sig: str, atr: float):
         """Logs trade attempt details to CSV."""
@@ -946,8 +1042,8 @@ class ForexBot:
         finally:
             mt5.shutdown()
 
-    def _order(self, sym: str, side: str, lot: float, atr: float = 0.0) -> bool:
-        req = self._build_order_request(sym, side, lot, atr)
+    def _order(self, sym: str, tf: int, side: str, lot: float, atr: float = 0.0) -> bool:
+        req = self._build_order_request(sym, tf, side, lot, atr)
         if req is None:
             return False
 
@@ -964,14 +1060,48 @@ class ForexBot:
             log.error("Order failed [%s]: %s (code %d)", sym, res.comment, res.retcode)
             return False
         self.risk.record()
-        log.info("ORDER OK %s %s | lot=%.2f | price=%.5f | SL=%.5f | TP=%.5f",
-                 side, sym, lot, req["price"], req["sl"], req["tp"])
+        log.info("ORDER OK %s %s | tf=%d | lot=%.2f | price=%.5f | SL=%.5f | TP=%.5f",
+                 side, sym, tf, lot, req["price"], req["sl"], req["tp"])
         return True
 
-    def _has_position(self, sym: str) -> bool:
+    def _close_position(self, p):
+        """Closes an open position."""
+        tick = mt5.symbol_info_tick(p.symbol)
+        if tick is None: return False
+        
+        type_dict = {
+            mt5.POSITION_TYPE_BUY: mt5.ORDER_TYPE_SELL,
+            mt5.POSITION_TYPE_SELL: mt5.ORDER_TYPE_BUY
+        }
+        price_dict = {
+            mt5.POSITION_TYPE_BUY: tick.bid,
+            mt5.POSITION_TYPE_SELL: tick.ask
+        }
+        
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": p.symbol,
+            "volume": p.volume,
+            "type": type_dict[p.type],
+            "position": p.ticket,
+            "price": price_dict[p.type],
+            "deviation": 10,
+            "magic": p.magic,
+            "comment": "Expert Exit",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        res = mt5.order_send(request)
+        if res.retcode != mt5.TRADE_RETCODE_DONE:
+            log.error("[%s] Close failed: %s", p.symbol, res.comment)
+            return False
+        log.info("[%s] Position closed successfully.", p.symbol)
+        return True
+
+    def _has_position(self, sym: str, tf: int) -> bool:
         broker_sym = self._broker_symbol(sym)
-        # Only skip if the BOT itself has an open position for this symbol
-        pos = mt5.positions_get(symbol=broker_sym, magic=Config.MAGIC_NUMBER)
+        magic = Config.MAGIC_NUMBER + (tf % 100)
+        pos = mt5.positions_get(symbol=broker_sym, magic=magic)
         return pos is not None and len(pos) > 0
 
     def backtest(self, history: int = 2500, test_ratio: float = 0.30) -> Dict[str, dict]:
@@ -1116,40 +1246,51 @@ class ForexBot:
                     # Update Trailing SL for existing positions
                     self._trailing_stop()
 
-                    # Process each symbol
+                    # Process each symbol and timeframe
                     for sym in Config.SYMBOLS:
-                        try:
-                            if not self.risk.can_trade(acc.balance):
-                                break
-                            if self._has_position(sym):
-                                # log.info("[%s] Position open — skipping.", sym)
-                                continue
+                        for tf in Config.TIMEFRAMES:
+                            try:
+                                if not self.risk.can_trade(acc.balance):
+                                    break
+                                
+                                sig, confidence, ta_sig, ml_sig, atr = self._signal(sym, tf)
+                                
+                                # EXPERT LOGIC: Signal Reversal Exit
+                                magic = Config.MAGIC_NUMBER + (tf % 100)
+                                pos = mt5.positions_get(symbol=self._broker_symbol(sym), magic=magic)
+                                if pos:
+                                    p = pos[0]
+                                    if (p.type == mt5.POSITION_TYPE_BUY and sig == "SELL") or \
+                                       (p.type == mt5.POSITION_TYPE_SELL and sig == "BUY"):
+                                        log.warning("[%s|%d] Signal reversal detected. Closing position.", sym, tf)
+                                        self._close_position(p)
+                                    continue 
 
-                            sig, confidence, ta_sig, ml_sig, atr = self._signal(sym)
-                            if sig in ("BUY", "SELL"):
-                                si = mt5.symbol_info(self._broker_symbol(sym))
-                                sl_points = int((atr * Config.ATR_SL_MULT) / si.point) if atr > 0 else 300
-                                lot = self._lot(sym, sl_points, confidence)
-                                if self._order(sym, sig, lot, atr):
-                                    self._log_trade(sym, sig, confidence, ta_sig, ml_sig, atr)
+                                if self._has_position(sym, tf):
+                                    continue
+                                if sig in ("BUY", "SELL"):
+                                    si = mt5.symbol_info(self._broker_symbol(sym))
+                                    sl_points = int((atr * Config.ATR_SL_MULT) / si.point) if atr > 0 else 300
+                                    lot = self._lot(sym, sl_points, confidence)
+                                    if self._order(sym, tf, sig, lot, atr):
+                                        self._log_trade(sym, sig, confidence, ta_sig, ml_sig, atr)
 
-                        except Exception as e:
-                            log.error("[%s] Error in symbol loop: %s", sym, e)
+                            except Exception as e:
+                                log.error("[%s|%d] Error in scan loop: %s", sym, tf, e)
 
                 except Exception as e:
                     log.error("Main loop error: %s. Continuing...", e)
                     time.sleep(5)
 
-                # log.info("— scan complete — sleeping %ds —", Config.LOOP_INTERVAL)
-                
                 # ONLINE LEARNING: Continuous Feedback Loop
                 self.loop_count += 1
                 if self.loop_count >= 240:  # Every ~4 hours
-                    log.info("Continuous Feedback Loop: Retraining models with latest data + penalties...")
+                    log.info("Continuous Feedback Loop: Retraining models for all TFs...")
                     for sym in Config.SYMBOLS:
-                        df_retrain = self._candles(sym, Config.TIMEFRAME, Config.TRAIN_HISTORY)
-                        if df_retrain is not None and len(df_retrain) >= 100:
-                            self.ml.train(df_retrain, sym)
+                        for tf in Config.TIMEFRAMES:
+                            df_retrain = self._candles(sym, tf, Config.TRAIN_HISTORY)
+                            if df_retrain is not None and len(df_retrain) >= 100:
+                                self.ml.train(df_retrain, sym, tf)
                     self.loop_count = 0
 
                 time.sleep(Config.LOOP_INTERVAL)
