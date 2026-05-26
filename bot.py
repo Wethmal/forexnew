@@ -78,8 +78,12 @@ class Config:
     SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD"]
 
     # ── Timeframes ────────────────────────────────────────────
-    TIMEFRAME       = mt5.TIMEFRAME_H1   # Primary entry timeframe (1-hour)
-    TREND_TIMEFRAME = mt5.TIMEFRAME_H4   # Secondary filter (default H4)
+    # List of (Entry Timeframe, Trend Timeframe)
+    TIMEFRAMES = [
+        (mt5.TIMEFRAME_M30, mt5.TIMEFRAME_H1),
+        (mt5.TIMEFRAME_M15, mt5.TIMEFRAME_M30),
+        (mt5.TIMEFRAME_M5,  mt5.TIMEFRAME_M15)
+    ]
     USE_TREND_FILTER = True             # Enabled for safety
 
     # ── Risk Management ───────────────────────────────────────
@@ -89,9 +93,10 @@ class Config:
     MAX_DAILY_LOSS_PCT = 3.0    # daily loss cap (% of balance)
 
     # ── Trade Execution (Dynamic SL/TP) ───────────────────────
-    ATR_SL_MULT  = 2.0   # Stop Loss = 2.0 * ATR
-    ATR_TP_MULT  = 3.0   # Take Profit = 3.0 * ATR (better win rate)
+    ATR_SL_MULT  = 1.8   # Base Stop Loss = 1.8 * ATR
+    ATR_TP_MULT  = 3.0   # Base Take Profit = 3.0 * ATR
     TRAILING_SL  = True  # Enable Trailing Stop Loss
+    REVERSE_SIGNALS = False # Turned off, we use Break-Even strategy instead
     
     DEFAULT_LOT  = 0.01   # fallback lot size
     MAX_LOT      = 0.05   # hard cap per trade
@@ -103,9 +108,21 @@ class Config:
 
     # ── ML Settings ───────────────────────────────────────────
     ML_LOOKBACK             = 20    # feature window (bars)
-    ML_CONFIDENCE_THRESHOLD = 0.60  # min confidence to act on ML signal
+    # Raising this generally improves win-rate by skipping weak ML predictions.
+    ML_CONFIDENCE_THRESHOLD = 0.60
     ML_RETRAIN_CANDLES      = 1000  # retrain when this many new candles seen
-    LOG_FILE_TRADES         = "trade_logs.csv"
+
+    # Final trade gating (reduces overtrading / low-quality entries)
+    MIN_FINAL_CONFIDENCE_TO_TRADE = 0.58
+    TRADE_COOLDOWN_MINS           = 10
+
+    # Spread filter (skip trades when spread is too large vs ATR)
+    MAX_SPREAD_ATR_RATIO_FX     = 0.15
+    MAX_SPREAD_ATR_RATIO_CRYPTO = 0.35
+
+    # Logging
+    LOG_FILE_TRADES   = "trade_signals.csv"  # clean, consistent schema going forward
+    LOG_FILE_RESULTS  = "trade_results.csv"  # closed-trade outcomes (synced from MT5 history)
 
     # ── Bot Loop ──────────────────────────────────────────────
     LOOP_INTERVAL = 60    # seconds between each market scan
@@ -408,7 +425,7 @@ class CandlePredictor:
         return lab
 
     # ── Training ──────────────────────────────────────────────
-    def train(self, df: pd.DataFrame, symbol: str = "default") -> float:
+    def train(self, df: pd.DataFrame, symbol: str = "default", tf: int = None) -> float:
         feat   = self._features(df)
         labels = self._labels(df)
 
@@ -442,35 +459,41 @@ class CandlePredictor:
         
         # Get TF string for filename
         R_MAP = {v: k for k, v in Config.TF_MAP.items()}
-        tf_str = R_MAP.get(Config.TIMEFRAME, "UNK")
+        tf_str = R_MAP.get(tf, "UNK")
+        model_key = f"{symbol}_{tf_str}"
         
         log.info("[%s] ML trained (%s) | val accuracy: %.1f%%", symbol, tf_str, acc * 100)
 
-        self.models[symbol]  = model
-        self.scalers[symbol] = scaler
-        self.trained[symbol] = True
+        self.models[model_key]  = model
+        self.scalers[model_key] = scaler
+        self.trained[model_key] = True
 
         os.makedirs(Config.MODEL_DIR, exist_ok=True)
-        joblib.dump(model,  f"{Config.MODEL_DIR}/{symbol}_{tf_str}_model.pkl")
-        joblib.dump(scaler, f"{Config.MODEL_DIR}/{symbol}_{tf_str}_scaler.pkl")
+        joblib.dump(model,  f"{Config.MODEL_DIR}/{model_key}_model.pkl")
+        joblib.dump(scaler, f"{Config.MODEL_DIR}/{model_key}_scaler.pkl")
         return acc
 
-    def load(self, symbol: str) -> bool:
+    def load(self, symbol: str, tf: int = None) -> bool:
         try:
             R_MAP = {v: k for k, v in Config.TF_MAP.items()}
-            tf_str = R_MAP.get(Config.TIMEFRAME, "UNK")
-            self.models[symbol]  = joblib.load(f"{Config.MODEL_DIR}/{symbol}_{tf_str}_model.pkl")
-            self.scalers[symbol] = joblib.load(f"{Config.MODEL_DIR}/{symbol}_{tf_str}_scaler.pkl")
-            self.trained[symbol] = True
+            tf_str = R_MAP.get(tf, "UNK")
+            model_key = f"{symbol}_{tf_str}"
+            self.models[model_key]  = joblib.load(f"{Config.MODEL_DIR}/{model_key}_model.pkl")
+            self.scalers[model_key] = joblib.load(f"{Config.MODEL_DIR}/{model_key}_scaler.pkl")
+            self.trained[model_key] = True
             log.info("[%s] Loaded saved ML model (%s).", symbol, tf_str)
             return True
         except FileNotFoundError:
             return False
 
     # ── Prediction ────────────────────────────────────────────
-    def predict(self, df: pd.DataFrame, symbol: str = "default") -> Tuple[str, float]:
-        if not self.trained.get(symbol):
-            if not self.load(symbol):
+    def predict(self, df: pd.DataFrame, symbol: str = "default", tf: int = None) -> Tuple[str, float]:
+        R_MAP = {v: k for k, v in Config.TF_MAP.items()}
+        tf_str = R_MAP.get(tf, "UNK")
+        model_key = f"{symbol}_{tf_str}"
+
+        if not self.trained.get(model_key):
+            if not self.load(symbol, tf):
                 return "HOLD", 0.0
 
         feat   = self._features(df)
@@ -479,9 +502,9 @@ class CandlePredictor:
             return "HOLD", 0.0
 
         try:
-            X    = self.scalers[symbol].transform(latest.values)
-            prob = self.models[symbol].predict_proba(X)[0]
-            cls  = self.models[symbol].classes_
+            X    = self.scalers[model_key].transform(latest.values)
+            prob = self.models[model_key].predict_proba(X)[0]
+            cls  = self.models[model_key].classes_
             best = int(np.argmax(prob))
             sig  = {0: "SELL", 1: "HOLD", 2: "BUY"}.get(cls[best], "HOLD")
             return sig, float(prob[best])
@@ -658,12 +681,46 @@ class ForexBot:
         self.eq_start  = 0.0
         self.loop_count = 0  # For online learning feedback loop
         self.symbol_map: Dict[str, str] = {}
+        self._last_trade_time: Dict[str, datetime] = {}
+        self._last_history_sync: datetime = datetime.min.replace(tzinfo=timezone.utc)
         
-        # Initialize log file with header if not exists
-        if not os.path.exists(Config.LOG_FILE_TRADES):
-            with open(Config.LOG_FILE_TRADES, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(["Timestamp", "Symbol", "Action", "Confidence", "TA_Signal", "ML_Signal", "ATR", "Actual_Close"])
+        self._init_logs()
+
+    @staticmethod
+    def _ensure_csv_header(path: str, header: List[str]) -> None:
+        if not os.path.exists(path):
+            with open(path, 'w', newline='') as f:
+                csv.writer(f).writerow(header)
+            return
+
+        try:
+            with open(path, 'r', newline='') as f:
+                first = f.readline().strip("\n\r")
+            if not first:
+                with open(path, 'w', newline='') as f:
+                    csv.writer(f).writerow(header)
+        except Exception:
+            # If we can't read the file, don't overwrite it.
+            pass
+
+    def _init_logs(self) -> None:
+        self._ensure_csv_header(
+            Config.LOG_FILE_TRADES,
+            [
+                "Timestamp", "Symbol", "Timeframe", "Side",
+                "Final_Confidence", "TA_Signal", "ML_Signal", "ML_Confidence",
+                "ATR", "Bid", "Ask", "Spread",
+                "Volume", "SL", "TP", "Order", "Deal", "Magic",
+            ],
+        )
+        self._ensure_csv_header(
+            Config.LOG_FILE_RESULTS,
+            [
+                "Position_ID", "Symbol", "Side", "Volume",
+                "Time_Open", "Time_Close", "Price_Open", "Price_Close",
+                "Profit", "Commission", "Swap", "Magic",
+            ],
+        )
 
     # ── MT5 Connection ────────────────────────────────────────
     def _connect(self) -> bool:
@@ -723,57 +780,101 @@ class ForexBot:
             raise RuntimeError(f"No tick data for {sym}")
         return t.bid, t.ask
 
-    def _combine_signal_from_df(self, df: pd.DataFrame, sym: str, trend: str = "NEUTRAL") -> Tuple[str, str, str, float, dict]:
-        ta_sig, ta_det = self.ta.get_signal(df)
-        ml_sig, ml_con = self.ml.predict(df, sym)
+    @staticmethod
+    def _is_crypto(sym: str) -> bool:
+        s = (sym or "").upper()
+        return "BTC" in s or "ETH" in s
 
-        # Both agree + ML confident -> strong signal
-        if ta_sig == ml_sig and ml_con >= Config.ML_CONFIDENCE_THRESHOLD:
+    def _max_spread_atr_ratio(self, sym: str) -> float:
+        return Config.MAX_SPREAD_ATR_RATIO_CRYPTO if self._is_crypto(sym) else Config.MAX_SPREAD_ATR_RATIO_FX
+
+    def _combine_signal_from_df(
+        self,
+        df: pd.DataFrame,
+        sym: str,
+        trend: str = "NEUTRAL",
+        tf: int = None,
+    ) -> Tuple[str, str, str, float, float, dict]:
+        ta_sig, ta_det = self.ta.get_signal(df)
+        ml_sig, ml_conf = self.ml.predict(df, sym, tf)
+
+        buy_votes = ta_det.get("buy_votes", 0)
+        sell_votes = ta_det.get("sell_votes", 0)
+        adx = ta_det.get("adx", 0.0)
+        vote_edge = abs(buy_votes - sell_votes)
+        ta_votes = max(buy_votes, sell_votes)
+        ta_strength = min(1.0, ta_votes / 8.0)
+        edge_strength = min(1.0, vote_edge / 4.0)
+
+        if ta_sig == "HOLD" or adx < 18:
+            sig = "HOLD"
+        elif ta_sig == ml_sig and ml_conf >= Config.ML_CONFIDENCE_THRESHOLD:
+            # Case 1: TA and ML agree with decent confidence
             sig = ta_sig
-        elif ml_con >= 0.80 and ml_sig != "HOLD":
-            sig = ml_sig
-        elif ta_sig != "HOLD" and ml_sig == "HOLD":
-            # Allow TA signal to go through if ML is just predicting HOLD
-            # (ML only predicts the single next candle, which is often HOLD)
+        elif ml_sig == ta_sig and ml_conf >= 0.35 and vote_edge >= 3:
+            # Case 2: Strong TA agreement, even with lower ML confidence
+            sig = ta_sig
+        elif ta_sig != "HOLD" and ml_sig == "HOLD" and ta_votes >= 6 and vote_edge >= 3 and adx >= 22:
+            # Case 3: Very strong TA with Neutral ML
             sig = ta_sig
         else:
             sig = "HOLD"
 
-        # Apply trend filter
+        # Reverse Strategy (Since the bot was losing 80% of the time)
+        if getattr(Config, "REVERSE_SIGNALS", False):
+            if sig == "BUY":
+                sig = "SELL"
+                # log.debug("[%s] Signal REVERSED: BUY -> SELL", sym)
+            elif sig == "SELL":
+                sig = "BUY"
+                # log.debug("[%s] Signal REVERSED: SELL -> BUY", sym)
+
+        # Apply trend filter (after reversal)
         if Config.USE_TREND_FILTER and trend != "NEUTRAL":
             if sig == "BUY" and trend != "BULL":
-                log.info("[%s] BUY signal blocked by %s trend filter.", sym, trend)
+                # log.debug("[%s] BUY signal blocked by %s trend filter.", sym, trend)
                 sig = "HOLD"
             elif sig == "SELL" and trend != "BEAR":
-                log.info("[%s] SELL signal blocked by %s trend filter.", sym, trend)
+                # log.debug("[%s] SELL signal blocked by %s trend filter.", sym, trend)
                 sig = "HOLD"
 
-        return sig, ta_sig, ml_sig, ml_con, ta_det
+        # Calculate final confidence (even if HOLD)
+        trend_bonus = 0.15 if ((sig == "BUY" and trend == "BULL") or (sig == "SELL" and trend == "BEAR")) else 0.0
+        final_conf = (0.55 * ml_conf) + (0.25 * ta_strength) + (0.20 * edge_strength) + trend_bonus
+        final_conf = max(0.0, min(1.0, final_conf))
 
-    def _signal(self, sym: str) -> Tuple[str, float, str, str, float]:
+        # Quality gate: only trade if the overall setup is strong enough.
+        if sig in ("BUY", "SELL") and final_conf < Config.MIN_FINAL_CONFIDENCE_TO_TRADE:
+            sig = "HOLD"
+
+        return sig, ta_sig, ml_sig, ml_conf, final_conf, ta_det
+
+    def _signal(self, sym: str, tf: int, trend_tf: int) -> Tuple[str, float, float, str, str, float]:
         # News Filter Check
         if self.news.is_news_time(sym):
-            return "HOLD", 0.0, "HOLD", "HOLD", 0.0
+            return "HOLD", 0.0, 0.0, "HOLD", "HOLD", 0.0
 
         # Entry timeframe data
-        df = self._candles(sym, Config.TIMEFRAME, Config.DATA_HISTORY)
+        df = self._candles(sym, tf, Config.DATA_HISTORY)
         if df is None or len(df) < 100:
-            return "HOLD", 0.0, "HOLD", "HOLD", 0.0
+            return "HOLD", 0.0, 0.0, "HOLD", "HOLD", 0.0
 
         # Trend timeframe data
         trend = "NEUTRAL"
         if Config.USE_TREND_FILTER:
-            df_trend = self._candles(sym, Config.TREND_TIMEFRAME, Config.DATA_HISTORY)
+            df_trend = self._candles(sym, trend_tf, Config.DATA_HISTORY)
             trend = self.ta.get_trend_direction(df_trend)
 
-        sig, ta_sig, ml_sig, ml_con, ta_det = self._combine_signal_from_df(df, sym, trend)
+        sig, ta_sig, ml_sig, ml_conf, final_conf, ta_det = self._combine_signal_from_df(df, sym, trend, tf)
         atr = self.ta.get_atr(df)
 
-        log.info("[%s] Trend=%s | TA=%s(B:%d/S:%d) | ML=%s(%.0f%%) | ATR=%.5f | FINAL=%s",
-                 sym, trend, ta_sig, ta_det.get("buy_votes", 0),
-                 ta_det.get("sell_votes", 0), ml_sig, ml_con * 100, atr, sig)
+        R_MAP = {v: k for k, v in Config.TF_MAP.items()}
+        tf_str = R_MAP.get(tf, "UNK")
+        log.info("[%s|%s] Trend=%s | TA=%s(B:%d/S:%d) | ML=%s(%.0f%%) | FinalConf=%.0f%% | ATR=%.5f | FINAL=%s",
+                 sym, tf_str, trend, ta_sig, ta_det.get("buy_votes", 0),
+             ta_det.get("sell_votes", 0), ml_sig, ml_conf * 100, final_conf * 100, atr, sig)
 
-        return sig, ml_con, ta_sig, ml_sig, atr
+        return sig, ml_conf, final_conf, ta_sig, ml_sig, atr
 
     # ── Order Execution ───────────────────────────────────────
     def _lot(self, sym: str, sl_points: int, confidence: float = 0.0) -> float:
@@ -807,22 +908,44 @@ class ForexBot:
 
         return si.volume_min
 
-    def _build_order_request(self, sym: str, side: str, lot: float, atr: float = 0.0) -> Optional[dict]:
+    def _build_order_request(self, sym: str, side: str, lot: float, atr: float = 0.0, confidence: float = 0.0) -> Optional[dict]:
         broker_sym = self._broker_symbol(sym)
         si = mt5.symbol_info(broker_sym)
         if si is None: return None
         bid, ask = self._price(sym)
         pt = si.point
 
-        # Dynamic SL/TP based on ATR
-        if atr > 0:
-            sl_dist = atr * Config.ATR_SL_MULT
-            tp_dist = atr * Config.ATR_TP_MULT
+        # Spread filter (common cause of instant drawdown / SL hits)
+        spread = abs(ask - bid)
+        if atr and atr > 0:
+            ratio_limit = self._max_spread_atr_ratio(sym)
+            if spread > atr * ratio_limit:
+                log.info("[%s] Skip trade: spread %.5f too high vs ATR %.5f (limit %.2f×ATR)", sym, spread, atr, ratio_limit)
+                return None
+
+        confidence = max(0.0, min(1.0, confidence))
+        if confidence >= 0.90:
+            sl_mult, rr_mult = 1.55, 2.45
+        elif confidence >= 0.80:
+            sl_mult, rr_mult = 1.70, 2.20
         else:
-            # Fallback to points if ATR is missing (e.g. 30 pips)
+            sl_mult, rr_mult = 1.90, 1.90
+
+        # Dynamic SL/TP based on ATR and signal quality.
+        if atr > 0:
+            atr_pct = atr / max(ask, pt)
+            if atr_pct > 0.004:
+                sl_mult += 0.20
+                rr_mult += 0.15
+            elif atr_pct < 0.0015:
+                sl_mult -= 0.10
+            sl_dist = atr * max(1.35, sl_mult)
+            tp_dist = sl_dist * rr_mult
+        else:
+            # Fallback to points if ATR is missing.
             pip_size = 10 * pt if si.digits in (3, 5) else pt
-            sl_dist = 30 * pip_size
-            tp_dist = 60 * pip_size
+            sl_dist = 24 * pip_size
+            tp_dist = 48 * pip_size
 
         min_stop_dist = (si.trade_stops_level + 5) * pt
         sl_dist = max(sl_dist, min_stop_dist)
@@ -869,24 +992,38 @@ class ForexBot:
                     if not si: continue
                     
                     # Fetch latest ATR for dynamic trailing step
-                    df = self._candles(sym, Config.TIMEFRAME, 20)
-                    if df is None or len(df) < 14: continue
-                    atr = self.ta.get_atr(df)
+                    atr = 0.0
+                    if p.comment and p.comment.startswith("ATR:"):
+                        try:
+                            atr = float(p.comment.split(":")[1])
+                        except: pass
+                    if atr <= 0.0:
+                        base_tf = mt5.TIMEFRAME_M15
+                        df = self._candles(sym, base_tf, 20)
+                        if df is None or len(df) < 14: continue
+                        atr = self.ta.get_atr(df)
                     
                     trail_step = atr * 0.5 # Move SL every 0.5 ATR profit
                     bid, ask = self._price(sym)
                     
                     new_sl = 0.0
                     if p.type == mt5.POSITION_TYPE_BUY:
-                        # If current price is far enough above SL
-                        if bid - p.sl > atr * Config.ATR_SL_MULT:
-                            potential_sl = bid - (atr * Config.ATR_SL_MULT)
+                        profit_dist = bid - p.price_open
+                        initial_risk = max((p.price_open - p.sl) if p.sl > 0 else 0.0, atr * Config.ATR_SL_MULT, 10 * si.point)
+                        if profit_dist >= initial_risk and p.sl < p.price_open:
+                            new_sl = p.price_open + max(5 * si.point, initial_risk * 0.10)
+                        elif profit_dist >= initial_risk * 1.5:
+                            potential_sl = bid - (initial_risk * 0.85)
                             if potential_sl > p.sl + trail_step:
                                 new_sl = potential_sl
                     elif p.type == mt5.POSITION_TYPE_SELL:
-                        if p.sl - ask > atr * Config.ATR_SL_MULT:
-                            potential_sl = ask + (atr * Config.ATR_SL_MULT)
-                            if potential_sl < p.sl - trail_step:
+                        profit_dist = p.price_open - ask
+                        initial_risk = max((p.sl - p.price_open) if p.sl > 0 else 0.0, atr * Config.ATR_SL_MULT, 10 * si.point)
+                        if profit_dist >= initial_risk and (p.sl > p.price_open or p.sl == 0):
+                            new_sl = p.price_open - max(5 * si.point, initial_risk * 0.10)
+                        elif profit_dist >= initial_risk * 1.5:
+                            potential_sl = ask + (initial_risk * 0.85)
+                            if potential_sl < p.sl - trail_step or p.sl == 0:
                                 new_sl = potential_sl
 
                     if new_sl > 0:
@@ -906,13 +1043,47 @@ class ForexBot:
         except Exception as e:
             log.error("Critical error in trailing stop loop: %s", e)
 
-    def _log_trade(self, sym: str, side: str, conf: float, ta_sig: str, ml_sig: str, atr: float):
-        """Logs trade attempt details to CSV."""
+    def _log_trade(
+        self,
+        sym: str,
+        tf: int,
+        side: str,
+        final_conf: float,
+        ta_sig: str,
+        ml_sig: str,
+        ml_conf: float,
+        atr: float,
+        lot: float,
+        req: dict,
+        order_id: int,
+        deal_id: int,
+    ) -> None:
+        """Logs executed trade details to CSV (for later analysis)."""
+        bid, ask = self._price(sym)
+        spread = abs(ask - bid)
+        R_MAP = {v: k for k, v in Config.TF_MAP.items()}
+        tf_str = R_MAP.get(tf, "UNK")
         with open(Config.LOG_FILE_TRADES, 'a', newline='') as f:
             writer = csv.writer(f)
             writer.writerow([
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                sym, side, round(conf, 2), ta_sig, ml_sig, round(atr, 6), ""
+                sym,
+                tf_str,
+                side,
+                round(float(final_conf), 4),
+                ta_sig,
+                ml_sig,
+                round(float(ml_conf), 4),
+                round(float(atr), 6),
+                bid,
+                ask,
+                spread,
+                round(float(lot), 2),
+                req.get("sl"),
+                req.get("tp"),
+                int(order_id) if order_id else "",
+                int(deal_id) if deal_id else "",
+                Config.MAGIC_NUMBER,
             ])
 
     @staticmethod
@@ -924,7 +1095,7 @@ class ForexBot:
         if not self._connect():
             return False
         try:
-            df = self._candles(sym, Config.TIMEFRAME, 20)
+            df = self._candles(sym, Config.TIMEFRAMES[0][0], 20)
             atr = self.ta.get_atr(df) if df is not None else 0.0
             
             # Estimate SL points for lot calc
@@ -946,27 +1117,27 @@ class ForexBot:
         finally:
             mt5.shutdown()
 
-    def _order(self, sym: str, side: str, lot: float, atr: float = 0.0) -> bool:
-        req = self._build_order_request(sym, side, lot, atr)
+    def _order(self, sym: str, side: str, lot: float, atr: float = 0.0, confidence: float = 0.0) -> Optional[Tuple[int, int, dict]]:
+        req = self._build_order_request(sym, side, lot, atr, confidence)
         if req is None:
-            return False
+            return None
 
         check = mt5.order_check(req)
         if check is None:
             log.error("Order check failed [%s]: %s", sym, mt5.last_error())
-            return False
+            return None
         if not self._order_check_passed(check.retcode):
             log.error("Order check rejected [%s]: %s (code %d)", sym, check.comment, check.retcode)
-            return False
+            return None
 
         res = mt5.order_send(req)
         if res.retcode != mt5.TRADE_RETCODE_DONE:
             log.error("Order failed [%s]: %s (code %d)", sym, res.comment, res.retcode)
-            return False
+            return None
         self.risk.record()
         log.info("ORDER OK %s %s | lot=%.2f | price=%.5f | SL=%.5f | TP=%.5f",
                  side, sym, lot, req["price"], req["sl"], req["tp"])
-        return True
+        return int(getattr(res, "order", 0) or 0), int(getattr(res, "deal", 0) or 0), req
 
     def _has_position(self, sym: str) -> bool:
         broker_sym = self._broker_symbol(sym)
@@ -974,15 +1145,135 @@ class ForexBot:
         pos = mt5.positions_get(symbol=broker_sym, magic=Config.MAGIC_NUMBER)
         return pos is not None and len(pos) > 0
 
+    def _sync_trade_results_if_needed(self, now_utc: datetime, days_back: int = 7) -> None:
+        # Keep it lightweight; sync at most every 15 minutes.
+        if (now_utc - self._last_history_sync).total_seconds() < 900:
+            return
+        self._last_history_sync = now_utc
+        try:
+            self._sync_trade_results(days_back=days_back)
+        except Exception as e:
+            log.error("Trade result sync failed: %s", e)
+
+    def _sync_trade_results(self, days_back: int = 7) -> int:
+        """Append newly-closed bot positions to Config.LOG_FILE_RESULTS.
+
+        This enables real win-rate tracking from MT5 profit, commission, and swap.
+        """
+        # MT5 history API typically expects naive datetimes in terminal timezone.
+        to_dt = datetime.now()
+        from_dt = to_dt - timedelta(days=days_back)
+
+        deals = mt5.history_deals_get(from_dt, to_dt)
+        if deals is None:
+            return 0
+
+        bot_deals = [d for d in deals if int(getattr(d, "magic", 0) or 0) == int(Config.MAGIC_NUMBER)]
+        if not bot_deals:
+            return 0
+
+        existing = set()
+        try:
+            with open(Config.LOG_FILE_RESULTS, "r", newline="") as f:
+                r = csv.DictReader(f)
+                for row in r:
+                    pid = (row.get("Position_ID") or "").strip()
+                    if pid:
+                        existing.add(pid)
+        except Exception:
+            pass
+
+        # Group by position_id (fallback to order id if missing)
+        grouped: Dict[str, List] = {}
+        for d in bot_deals:
+            pos_id = int(getattr(d, "position_id", 0) or 0)
+            order_id = int(getattr(d, "order", 0) or 0)
+            key = str(pos_id or order_id or getattr(d, "ticket", ""))
+            grouped.setdefault(key, []).append(d)
+
+        rows_to_append: List[List] = []
+        for key, ds in grouped.items():
+            if key in existing:
+                continue
+            ds_sorted = sorted(ds, key=lambda x: int(getattr(x, "time", 0) or 0))
+
+            # Determine if position is closed (has any OUT deal)
+            has_out = False
+            for d in ds_sorted:
+                entry = int(getattr(d, "entry", -1) or -1)
+                if entry in (getattr(mt5, "DEAL_ENTRY_OUT", 1), getattr(mt5, "DEAL_ENTRY_OUT_BY", 2)):
+                    has_out = True
+                    break
+            if not has_out:
+                continue
+
+            first = ds_sorted[0]
+            last = ds_sorted[-1]
+            symbol = getattr(first, "symbol", "")
+
+            # Side: use the first IN deal type if available.
+            side = ""
+            for d in ds_sorted:
+                entry = int(getattr(d, "entry", -1) or -1)
+                if entry == getattr(mt5, "DEAL_ENTRY_IN", 0):
+                    dtype = int(getattr(d, "type", -1) or -1)
+                    side = "BUY" if dtype == getattr(mt5, "DEAL_TYPE_BUY", 0) else "SELL"
+                    break
+            if not side:
+                dtype = int(getattr(first, "type", -1) or -1)
+                side = "BUY" if dtype == getattr(mt5, "DEAL_TYPE_BUY", 0) else "SELL"
+
+            volume = float(getattr(first, "volume", 0.0) or 0.0)
+            t_open = datetime.fromtimestamp(int(getattr(first, "time", 0) or 0)).strftime("%Y-%m-%d %H:%M:%S")
+            t_close = datetime.fromtimestamp(int(getattr(last, "time", 0) or 0)).strftime("%Y-%m-%d %H:%M:%S")
+            price_open = float(getattr(first, "price", 0.0) or 0.0)
+            price_close = float(getattr(last, "price", 0.0) or 0.0)
+
+            profit = float(sum(float(getattr(d, "profit", 0.0) or 0.0) for d in ds_sorted))
+            commission = float(sum(float(getattr(d, "commission", 0.0) or 0.0) for d in ds_sorted))
+            swap = float(sum(float(getattr(d, "swap", 0.0) or 0.0) for d in ds_sorted))
+
+            rows_to_append.append([
+                key,
+                symbol,
+                side,
+                volume,
+                t_open,
+                t_close,
+                price_open,
+                price_close,
+                profit,
+                commission,
+                swap,
+                Config.MAGIC_NUMBER,
+            ])
+
+        if not rows_to_append:
+            return 0
+
+        with open(Config.LOG_FILE_RESULTS, "a", newline="") as f:
+            w = csv.writer(f)
+            for row in rows_to_append:
+                w.writerow(row)
+
+        log.info("Synced %d closed positions into %s", len(rows_to_append), Config.LOG_FILE_RESULTS)
+        return len(rows_to_append)
+
     def backtest(self, history: int = 2500, test_ratio: float = 0.30) -> Dict[str, dict]:
-        """Run a lightweight walk-forward backtest on recent MT5 candles."""
+        """Run a lightweight walk-forward backtest on recent MT5 candles.
+
+        Notes:
+          - This is a *bar-based* simulator (uses OHLC), not tick-accurate.
+          - It evaluates realistic outcomes by simulating SL/TP hits using bar High/Low.
+          - It still isn't a substitute for forward testing (spread/slippage/partial fills).
+        """
         results: Dict[str, dict] = {}
         if not self._connect():
             return results
 
         try:
             for sym in Config.SYMBOLS:
-                df = self._candles(sym, Config.TIMEFRAME, history)
+                df = self._candles(sym, Config.TIMEFRAMES[0][0], history)
                 if df is None or len(df) < 220:
                     log.warning("[%s] Not enough candles for backtest.", sym)
                     continue
@@ -994,72 +1285,124 @@ class ForexBot:
                     log.warning("[%s] Backtest split too small.", sym)
                     continue
 
-                self.ml.train(train_df, sym)
+                self.ml.train(train_df, sym, Config.TIMEFRAMES[0][0])
 
-                y_true = []
-                y_pred = []
-                action_true = []
-                action_pred = []
-                trade_count = 0
+                trades = 0
+                wins = 0
+                losses = 0
+                r_mults: List[float] = []
 
-                # Fetch trend data for entire backtest if needed
-                trend_map = {}
-                if Config.USE_TREND_FILTER:
-                    df_trend = self._candles(sym, Config.TREND_TIMEFRAME, history)
-                    if df_trend is not None:
-                        for idx, row in df_trend.iterrows():
-                            # Simple trend at each point
-                            # Note: This is a bit naive but works for a lightweight backtest
-                            pass # We'll do it point-in-time below for accuracy
+                # conservative equity curve in R-units
+                eq = 0.0
+                peak = 0.0
+                max_dd = 0.0
 
-                start_i = min(120, max(30, len(test_df) // 3))
-                for i in range(start_i, len(test_df) - 1):
+                start_i = min(200, max(60, len(test_df) // 3))
+                # i is the index of the *signal evaluation* bar; entry happens on i+1 open.
+                for i in range(start_i, len(test_df) - 2):
                     window = pd.concat([train_df, test_df.iloc[: i + 1]])
-                    
-                    trend = "NEUTRAL"
-                    if Config.USE_TREND_FILTER:
-                        # Get trend at this point in time from HTF
-                        current_time = test_df.index[i]
-                        # Fetch recent HTF candles up to this time
-                        df_trend = self._candles(sym, Config.TREND_TIMEFRAME, 250) # Fetch some history
-                        # In a real backtest we'd use a faster method, but this ensures correctness with current MT5 connection
-                        trend = self.ta.get_trend_direction(df_trend)
 
-                    sig, _, _, _, _ = self._combine_signal_from_df(window, sym, trend)
+                    trend = self.ta.get_trend_direction(window) if Config.USE_TREND_FILTER else "NEUTRAL"
+                    sig, _, _, ml_conf, final_conf, _ = self._combine_signal_from_df(window, sym, trend, Config.TIMEFRAMES[0][0])
+                    if sig not in ("BUY", "SELL"):
+                        continue
 
-                    nxt_ret = (test_df["Close"].iloc[i + 1] / test_df["Close"].iloc[i]) - 1
-                    true_dir = 1 if nxt_ret > 0 else (-1 if nxt_ret < 0 else 0)
-                    pred_dir = {"BUY": 1, "SELL": -1, "HOLD": 0}[sig]
+                    # Entry at next bar open (more realistic than same-bar close)
+                    entry_i = i + 1
+                    entry = float(test_df["Open"].iloc[entry_i])
 
-                    y_true.append(true_dir)
-                    y_pred.append(pred_dir)
+                    atr = float(self.ta.get_atr(window))
+                    if not np.isfinite(atr) or atr <= 0:
+                        continue
 
-                    if pred_dir != 0:
-                        trade_count += 1
-                        action_true.append(true_dir)
-                        action_pred.append(pred_dir)
+                    conf = float(final_conf)
+                    if conf >= 0.90:
+                        sl_mult, rr_mult = 1.55, 2.45
+                    elif conf >= 0.80:
+                        sl_mult, rr_mult = 1.70, 2.20
+                    else:
+                        sl_mult, rr_mult = 1.90, 1.90
 
-                overall_acc = accuracy_score(y_true, y_pred) if y_true else 0.0
-                action_acc = accuracy_score(action_true, action_pred) if action_true else 0.0
+                    # Small volatility-based adjustment (mirrors live behavior)
+                    atr_pct = atr / max(abs(entry), 1e-9)
+                    if atr_pct > 0.004:
+                        sl_mult += 0.20
+                        rr_mult += 0.15
+                    elif atr_pct < 0.0015:
+                        sl_mult -= 0.10
+
+                    sl_dist = atr * max(1.35, sl_mult)
+                    tp_dist = sl_dist * rr_mult
+
+                    if sig == "BUY":
+                        sl = entry - sl_dist
+                        tp = entry + tp_dist
+                    else:
+                        sl = entry + sl_dist
+                        tp = entry - tp_dist
+
+                    outcome_r: Optional[float] = None
+                    # Walk forward until SL/TP hit
+                    for j in range(entry_i, len(test_df)):
+                        hi = float(test_df["High"].iloc[j])
+                        lo = float(test_df["Low"].iloc[j])
+
+                        if sig == "BUY":
+                            hit_sl = lo <= sl
+                            hit_tp = hi >= tp
+                        else:
+                            hit_sl = hi >= sl
+                            hit_tp = lo <= tp
+
+                        # If both hit in same bar, assume worst-case (prevents optimistic bias)
+                        if hit_sl and hit_tp:
+                            outcome_r = -1.0
+                            break
+                        if hit_tp:
+                            outcome_r = rr_mult
+                            break
+                        if hit_sl:
+                            outcome_r = -1.0
+                            break
+
+                    if outcome_r is None:
+                        # Close at end of test (partial R)
+                        close_end = float(test_df["Close"].iloc[-1])
+                        if sig == "BUY":
+                            outcome_r = (close_end - entry) / sl_dist
+                        else:
+                            outcome_r = (entry - close_end) / sl_dist
+
+                    trades += 1
+                    r_mults.append(float(outcome_r))
+                    if outcome_r > 0:
+                        wins += 1
+                    else:
+                        losses += 1
+
+                    eq += float(outcome_r)
+                    peak = max(peak, eq)
+                    max_dd = max(max_dd, peak - eq)
+
+                win_rate = (wins / trades) if trades else 0.0
+                avg_r = float(np.mean(r_mults)) if r_mults else 0.0
+                gross_win = float(sum(r for r in r_mults if r > 0))
+                gross_loss = float(sum(abs(r) for r in r_mults if r < 0))
+                profit_factor = (gross_win / gross_loss) if gross_loss > 0 else (float('inf') if gross_win > 0 else 0.0)
 
                 results[sym] = {
                     "bars": len(df),
                     "train": len(train_df),
                     "test": len(test_df),
-                    "signals": len(y_pred),
-                    "trades": trade_count,
-                    "overall_accuracy": round(overall_acc, 4),
-                    "trade_direction_accuracy": round(action_acc, 4),
+                    "trades": trades,
+                    "win_rate": round(win_rate, 4),
+                    "avg_r": round(avg_r, 4),
+                    "profit_factor": round(profit_factor, 4) if np.isfinite(profit_factor) else float('inf'),
+                    "max_drawdown_r": round(float(max_dd), 4),
                 }
 
-                log.info(
-                    "[BT %s] overall_acc=%.2f%% | trade_acc=%.2f%% | trades=%d/%d",
-                    sym,
-                    overall_acc * 100,
-                    action_acc * 100,
-                    trade_count,
-                    len(y_pred),
-                )
+                log.info("[BT %s] win=%.1f%% | avgR=%.2f | PF=%.2f | maxDD(R)=%.2f | trades=%d",
+                         sym, win_rate * 100, avg_r, profit_factor if np.isfinite(profit_factor) else 0.0, max_dd, trades)
 
             return results
         finally:
@@ -1069,15 +1412,14 @@ class ForexBot:
     def run(self):
         # Create reverse map for logging
         R_MAP = {v: k for k, v in Config.TF_MAP.items()}
-        tf_str = R_MAP.get(Config.TIMEFRAME, str(Config.TIMEFRAME))
-        trend_tf_str = R_MAP.get(Config.TREND_TIMEFRAME, str(Config.TREND_TIMEFRAME))
+        tfs_str = ", ".join([f"{R_MAP.get(entry, 'UNK')}->{R_MAP.get(trend, 'UNK')}" for entry, trend in Config.TIMEFRAMES])
 
         log.info("=" * 60)
         log.info("  FOREX BOT STARTING")
         log.info("  Symbols      : %s", Config.SYMBOLS)
-        log.info("  Entry TF     : %s", tf_str)
+        log.info("  Timeframes   : %s", tfs_str)
         if Config.USE_TREND_FILTER:
-            log.info("  Trend Filter : %s (ENABLED)", trend_tf_str)
+            log.info("  Trend Filter : ENABLED")
         else:
             log.info("  Trend Filter : DISABLED")
         log.info("  Risk/trade   : %.1f%%  |  Max DD: %.1f%%", Config.RISK_PCT, Config.MAX_DRAWDOWN_PCT)
@@ -1089,17 +1431,19 @@ class ForexBot:
         # ── Initial ML training ───────────────────────────────
         log.info("Training ML models (this may take a moment)...")
         for sym in Config.SYMBOLS:
-            df = self._candles(sym, Config.TIMEFRAME, Config.TRAIN_HISTORY)
-            if df is not None and len(df) >= 100:
-                self.ml.train(df, sym)
-            else:
-                log.warning("[%s] Insufficient history for training.", sym)
+            for tf, _ in Config.TIMEFRAMES:
+                df = self._candles(sym, tf, Config.TRAIN_HISTORY)
+                if df is not None and len(df) >= 100:
+                    self.ml.train(df, sym, tf)
+                else:
+                    log.warning("[%s|%s] Insufficient history for training.", sym, R_MAP.get(tf, "UNK"))
         log.info("ML models ready.")
 
         self.running = True
         try:
             while self.running:
                 try:
+                    now_utc = datetime.now(timezone.utc)
                     acc = mt5.account_info()
                     if acc is None:
                         log.error("Lost MT5 connection. Retrying in 10s...")
@@ -1116,22 +1460,39 @@ class ForexBot:
                     # Update Trailing SL for existing positions
                     self._trailing_stop()
 
+                    # Sync closed trade results periodically (to measure real win-rate)
+                    self._sync_trade_results_if_needed(now_utc)
+
                     # Process each symbol
                     for sym in Config.SYMBOLS:
                         try:
                             if not self.risk.can_trade(acc.balance):
                                 break
+
+                            last_t = self._last_trade_time.get(sym)
+                            if last_t is not None:
+                                cooldown_s = Config.TRADE_COOLDOWN_MINS * 60
+                                if (now_utc - last_t).total_seconds() < cooldown_s:
+                                    continue
+
                             if self._has_position(sym):
                                 # log.info("[%s] Position open — skipping.", sym)
                                 continue
 
-                            sig, confidence, ta_sig, ml_sig, atr = self._signal(sym)
-                            if sig in ("BUY", "SELL"):
-                                si = mt5.symbol_info(self._broker_symbol(sym))
-                                sl_points = int((atr * Config.ATR_SL_MULT) / si.point) if atr > 0 else 300
-                                lot = self._lot(sym, sl_points, confidence)
-                                if self._order(sym, sig, lot, atr):
-                                    self._log_trade(sym, sig, confidence, ta_sig, ml_sig, atr)
+                            # Evaluate each timeframe pair
+                            for tf, trend_tf in Config.TIMEFRAMES:
+                                sig, ml_conf, final_conf, ta_sig, ml_sig, atr = self._signal(sym, tf, trend_tf)
+                                if sig in ("BUY", "SELL"):
+                                    si = mt5.symbol_info(self._broker_symbol(sym))
+                                    sl_points = int((atr * Config.ATR_SL_MULT) / si.point) if atr > 0 else 300
+                                    lot = self._lot(sym, sl_points, final_conf)
+                                    order_info = self._order(sym, sig, lot, atr, final_conf)
+                                    if order_info is not None:
+                                        order_id, deal_id, req = order_info
+                                        self._log_trade(sym, tf, sig, final_conf, ta_sig, ml_sig, ml_conf, atr, lot, req, order_id, deal_id)
+                                        self._last_trade_time[sym] = now_utc
+                                    # If trade taken, skip other timeframes for this symbol
+                                    break
 
                         except Exception as e:
                             log.error("[%s] Error in symbol loop: %s", sym, e)
@@ -1147,9 +1508,10 @@ class ForexBot:
                 if self.loop_count >= 240:  # Every ~4 hours
                     log.info("Continuous Feedback Loop: Retraining models with latest data + penalties...")
                     for sym in Config.SYMBOLS:
-                        df_retrain = self._candles(sym, Config.TIMEFRAME, Config.TRAIN_HISTORY)
-                        if df_retrain is not None and len(df_retrain) >= 100:
-                            self.ml.train(df_retrain, sym)
+                        for tf, _ in Config.TIMEFRAMES:
+                            df_retrain = self._candles(sym, tf, Config.TRAIN_HISTORY)
+                            if df_retrain is not None and len(df_retrain) >= 100:
+                                self.ml.train(df_retrain, sym, tf)
                     self.loop_count = 0
 
                 time.sleep(Config.LOOP_INTERVAL)
@@ -1167,8 +1529,8 @@ class ForexBot:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Forex bot with run, backtest and order validation modes.")
     parser.add_argument("--mode", choices=["run", "backtest", "check-order"], default="run")
-    parser.add_argument("--tf", default="H1", help="Primary entry timeframe (M1, M5, M15, M30, H1, H4, D1)")
-    parser.add_argument("--trend-tf", default="H4", help="Trend filter timeframe (used only if --use-filter is passed)")
+    parser.add_argument("--tf", default=None, help="Primary entry timeframe (M1, M5, M15, M30, H1, H4, D1)")
+    parser.add_argument("--trend-tf", default=None, help="Trend filter timeframe (used only if --use-filter is passed)")
     parser.add_argument("--use-filter", action="store_true", help="Enable higher timeframe trend filter")
     parser.add_argument("--symbol", default="EURUSD", help="Symbol for check-order mode")
     parser.add_argument("--side", choices=["BUY", "SELL"], default="BUY", help="Side for check-order mode")
@@ -1177,7 +1539,8 @@ if __name__ == "__main__":
 
     # Apply command-line overrides
     if args.tf in Config.TF_MAP:
-        Config.TIMEFRAME = Config.TF_MAP[args.tf]
+        # Override the first timeframe pair
+        Config.TIMEFRAMES = [(Config.TF_MAP[args.tf], Config.TIMEFRAMES[0][1])]
         # Adjust threshold based on timeframe
         if args.tf == "M15":
             Config.LABEL_THRESHOLD = 0.0003
@@ -1187,7 +1550,9 @@ if __name__ == "__main__":
             Config.LABEL_THRESHOLD = 0.0050
             
     if args.trend_tf in Config.TF_MAP:
-        Config.TREND_TIMEFRAME = Config.TF_MAP[args.trend_tf]
+        # Override the trend TF of the first pair (or the one just set)
+        Config.TIMEFRAMES = [(Config.TIMEFRAMES[0][0], Config.TF_MAP[args.trend_tf])]
+
     if args.use_filter:
         Config.USE_TREND_FILTER = True
 
@@ -1210,9 +1575,11 @@ if __name__ == "__main__":
                 print("\nBacktest summary")
                 for sym, stats in summary.items():
                     print(
-                        f"{sym}: overall={stats['overall_accuracy']*100:.2f}% | "
-                        f"trade_acc={stats['trade_direction_accuracy']*100:.2f}% | "
-                        f"trades={stats['trades']}/{stats['signals']}"
+                        f"{sym}: win_rate={stats.get('win_rate', 0)*100:.1f}% | "
+                        f"avgR={stats.get('avg_r', 0):.2f} | "
+                        f"PF={stats.get('profit_factor', 0):.2f} | "
+                        f"maxDD(R)={stats.get('max_drawdown_r', 0):.2f} | "
+                        f"trades={stats.get('trades', 0)}"
                     )
         else:
             ok = bot.validate_order(args.symbol, args.side)

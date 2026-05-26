@@ -1,0 +1,31 @@
+2026-05-04 14:22:39,655 | INFO     | Enhanced Bot Starting...
+2026-05-04 14:22:39,667 | ERROR    | Login failed
+2026-05-04 14:24:36,363 | INFO     | Enhanced Bot Starting...
+2026-05-04 14:24:36,377 | INFO     | Connected. Balance: 47.81
+2026-05-04 14:24:36,378 | WARNING  | [EURUSD] Skipping training – not enough data.
+2026-05-04 14:24:36,380 | WARNING  | [GBPUSD] Skipping training – not enough data.
+2026-05-04 14:24:36,382 | WARNING  | [USDJPY] Skipping training – not enough data.
+2026-05-04 14:24:36,383 | WARNING  | [BTCUSD] Skipping training – not enough data.
+2026-05-04 14:24:36,383 | WARNING  | [ETHUSD] Skipping training – not enough data.
+2026-05-04 14:52:30,194 | INFO     | Enhanced Bot Starting...
+2026-05-04 14:52:30,206 | INFO     | Connected. Balance: 47.81
+2026-05-04 14:52:30,206 | WARNING  | [EURUSD] Skipping training – not enough data.
+2026-05-04 14:52:30,206 | WARNING  | [GBPUSD] Skipping training – not enough data.
+2026-05-04 14:52:30,206 | WARNING  | [USDJPY] Skipping training – not enough data.
+2026-05-04 14:52:30,207 | WARNING  | [BTCUSD] Skipping training – not enough data.
+2026-05-04 14:52:30,207 | WARNING  | [ETHUSD] Skipping training – not enough data.
+2026-05-04 14:52:41,562 | INFO     | Enhanced Bot Starting...
+2026-05-04 14:52:41,573 | INFO     | Connected. Balance: 47.81
+2026-05-04 14:52:41,573 | WARNING  | [EURUSD] Skipping training – not enough data.
+2026-05-04 14:52:41,573 | WARNING  | [GBPUSD] Skipping training – not enough data.
+2026-05-04 14:52:41,574 | WARNING  | [USDJPY] Skipping training – not enough data.
+2026-05-04 14:52:41,574 | WARNING  | [BTCUSD] Skipping training – not enough data.
+2026-05-04 14:52:41,574 | WARNING  | [ETHUSD] Skipping training – not enough data.
+2026-05-04 15:01:35,014 | INFO     | Enhanced Bot Starting...
+2026-05-04 15:01:35,026 | INFO     | Connected. Balance: 47.81
+2026-05-04 15:01:35,026 | WARNING  | [EURUSD] Skipping training – not enough data.
+2026-05-04 15:01:35,027 | WARNING  | [GBPUSD] Skipping training – not enough data.
+2026-05-04 15:01:35,027 | WARNING  | [USDJPY] Skipping training – not enough data.
+2026-05-04 15:01:35,027 | WARNING  | [BTCUSD] Skipping training – not enough data.
+2026-05-04 15:01:35,027 | WARNING  | [ETHUSD] Skipping training – not enough data.
+2026-05-04 15:01:40,574 | INFO     | User stop.
